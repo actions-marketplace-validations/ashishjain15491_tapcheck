@@ -11,6 +11,21 @@ The first version. Not yet published to npm.
   `contract` (API status, JSON that parses, latency, response shape against a saved baseline), `security` (headers,
   cookie flags, pages that need sign-in, CSRF, served secrets, third-party requests) and `a11y` (axe-core WCAG 2.2
   A/AA, keyboard focus, page language).
+- **Interaction and UI audit suites (unreleased additions).** `interact` clicks every safe control on the crawled
+  screens and reports page errors, 5xx answers, native dialogs and controls that do nothing; checks each dialog it
+  opens (accessible name, focus, Escape, an error state for invalid input) and each table's sorting, search, paging
+  and row menu; and writes `interact.json`. `audit` is the full UI audit per screen: desktop light and dark, tablet
+  and phone, opened menus and dialogs, component and label-case consistency across screens, optional design-token
+  adherence, and Jev's look when Jev is on; it writes `audit.json`. New keys: `interact: {max, submit}`,
+  `audit: {max, skip}`, `design: {colors, fonts, radii, spacing}`. `interact.submit: true` changes data and is for a
+  throwaway database only.
+- **Run-level additions (unreleased).** `HEADED=1`, `SLOWMO=<ms>` and `START_DELAY=<s>` for watching a run;
+  `RECORD=1` for a video and a Playwright trace of every browser context, linked from the report. Flows get
+  `t.jev(label, questions?)` (Jev's look at the current page) and `t.mail.judge(mail, questions?)` (at an email), both
+  skipped cleanly with `JEV=off`. Every run writes `hits.json` per side, and `COVERAGE=1` merges all runs into
+  `COVERAGE.md`: each route with the part that reached it or GAP (`coverage: {file, reasons}`). `app.resetWhen` runs
+  `app.reset` by itself when matching files changed since the last reset. `stub.dns` answers DNS over UDP
+  (`TAPCHECK_DNS`), with overrides through the control API and `t.stub.dns()`.
 - **Jev suites.** `ux` (visual QA, design, heuristics, a five-second test, predicted attention) and `usability` (a
   simulated first-time user attempting each task, with a clickstream), with a per-run budget, a memo, and a log of
   every request. Unsure answers are warnings.

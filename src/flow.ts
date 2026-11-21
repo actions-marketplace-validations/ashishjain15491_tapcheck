@@ -14,16 +14,22 @@
  *
  * Each step is one finding: pass, or fail with what was thrown, a screenshot and the page's console errors; the flow
  * carries on after a failed step. Unlike the suites, a flow may click anything and change data: run it against a copy
- * you can reset.
+ * you can reset. t.jev() and t.mail.judge() ask Jev to look at the current page or at an email; with JEV=off or no key
+ * they record that they were skipped and return null, so a flow that calls them still runs everywhere.
  */
 import { globSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BrowserContext, Page } from 'playwright';
-import { abs, context, settle, slug, watch, type Run } from './browser.ts';
+import { abs, context, settle, slices, slug, watch, type Run } from './browser.ts';
 import { isLocal, type Config } from './config.ts';
+import * as jev from './jev.ts';
+import { EMAIL, VISUAL, YES_IS_DEFECT } from './questions.ts';
+import type { Finding } from './report.ts';
 import type { FailRule, Reply, Seen } from './stub.ts';
 
+/** For a flow's own questions to t.jev() and t.mail.judge(). */
+export { choice, noul, score } from '@typesafe-ai/sdk';
 export type Flow = { name: string; side?: string; run: (t: T) => Promise<void> };
 /** A flow as loaded: its side settled and its part name. */
 export type Loaded = Required<Flow> & { part: string };
@@ -73,6 +79,7 @@ export class T {
         const errors = this.current && this.errors.get(this.current);
         if (errors) errors.length = 0;
         const base = { suite: this.flow.part, where: this.flow.name, check: name };
+        this.r.step = name; // what the step reaches is filed under it (hits.json)
         try {
             this.r.record({ ...base, status: 'pass', detail: (await fn()) || undefined });
             return true;
@@ -84,7 +91,48 @@ export class T {
             this.r.record({ ...base, status: 'fail', evidence: shot ? [shot] : undefined,
                 detail: [String((e as Error).message ?? e).split('\n').slice(0, 4).join(' ⏎ ').slice(0, 500), seen.length ? `console: ${seen.slice(0, 3).join(' | ').slice(0, 300)}` : ''].filter(Boolean).join(' · ') });
             return false;
+        } finally {
+            this.r.step = undefined;
         }
+    }
+
+    /** Records that Jev's look at `label` was skipped, and why. */
+    private skipped(label: string, why: string): null {
+        this.r.record({ suite: this.flow.part, where: `${this.flow.name} › ${label}`, check: "Jev's look", status: 'info', detail: `skipped (${why})` });
+        return null;
+    }
+
+    /** Asks Jev about `shots`; one finding per answer. Null (and one info finding) when its budget is spent. */
+    private async look(label: string, state: Record<string, unknown>, questions: Record<string, any>, shots: string[]): Promise<Record<string, any> | null> {
+        const rec = (check: string, status: Finding['status'], detail?: string) => this.r.record({ suite: this.flow.part, where: `${this.flow.name} › ${label}`, check, status, detail, evidence: shots });
+        let a: Record<string, any>;
+        try { a = await jev.ask(`${this.flow.part}:${label}`, state, questions, shots); } catch (e) {
+            if (e instanceof jev.BudgetReached) return this.skipped(label, e.message);
+            throw e;
+        }
+        for (const [k, v] of Object.entries(a)) {
+            const name = `jev: ${k.replace(/_/g, ' ')}`;
+            if (typeof v?.noul === 'number') rec(name, jev.status((YES_IS_DEFECT.includes(k) ? jev.bad : jev.good)(v.noul)), `p=${v.noul.toFixed(2)}`);
+            else if (typeof v?.score === 'number') rec(name, jev.to10(v.score) >= jev.MIN_SCORE ? 'pass' : 'warn', `${jev.to10(v.score)}/10`);
+            else rec(name, 'info', JSON.stringify(v?.choice ?? v).slice(0, 200));
+        }
+        return a;
+    }
+
+    /**
+     * Jev's look at the current page: screenshots of it (up to three screens, top to bottom) and the visual questions
+     * (loaded, no error, overlap, clipping, raw keys, alignment), or your own `questions` about `screenshots` (built with
+     * the TypeSafe SDK's noul, score and choice). Each answer is a finding of the flow, and an unsure one a warning. A
+     * yes-or-no question of your own passes on yes; a score passes from 7 of 10 and is a warning below; any other answer is
+     * recorded as info. The answers are returned for the flow's own checks; null when Jev is off or over its budget.
+     */
+    async jev(label: string, questions: Record<string, any> = VISUAL): Promise<Record<string, any> | null> {
+        if (jev.whyOff()) return this.skipped(label, jev.whyOff());
+        const page = this.current ?? await this.page();
+        const vh = page.viewportSize()?.height ?? 800;
+        const shots = await slices(this.r, page, `${this.flow.part}-jev-${slug(label)}`, await page.evaluate(() => document.documentElement.scrollHeight), vh);
+        return this.look(label, { screen: label, screenshots: shots.map(jev.img),
+            note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined }, questions, shots);
     }
 
     private async api(base: string, path: string, method = 'GET', body?: unknown): Promise<any> {
@@ -109,8 +157,10 @@ export class T {
             fail: (rule: FailRule): Promise<void> => call('fail', 'POST', rule),
             /** Answers the next matching request with this, once. */
             reply: (rule: Reply): Promise<void> => call('reply', 'POST', rule),
-            /** Forgets the requests seen, the failures and the queued replies. */
-            clear: async () => { for (const p of ['requests', 'fail', 'reply']) await call(p, 'DELETE'); },
+            /** Answers that DNS question with these values from now on (stub.dns); null puts the config's answer back. */
+            dns: (name: string, type: string, values: string[] | null): Promise<void> => call('dns', 'POST', { name, type, values }),
+            /** Forgets the requests seen, the failures, the queued replies and the DNS answers set here. */
+            clear: async () => { for (const p of ['requests', 'fail', 'reply', 'dns']) await call(p, 'DELETE'); },
         };
     }
 
@@ -161,6 +211,33 @@ export class T {
                     }
                     if (Date.now() > until) throw new Error(`No email${query ? ` matching ${query}` : ''} arrived in Mailpit within ${(f.timeoutMs ?? 30_000) / 1000} s.`);
                     await new Promise((done) => setTimeout(done, 500));
+                }
+            },
+            /**
+             * Jev's look at an email: its HTML drawn in a page (scripts off) at a computer's and at a phone's width, then asked
+             * whether it is laid out properly, has no unfilled placeholder, shows its links and buttons, and reads on a phone
+             * (or your own `questions` about `screenshot` and `screenshot_mobile`). Findings and null as for t.jev().
+             * ponytail: only the first 1500 px of the email are looked at; slice it if long emails matter.
+             */
+            judge: async (m: Pick<Mail, 'subject' | 'html'>, questions: Record<string, any> = EMAIL): Promise<Record<string, any> | null> => {
+                const label = `email "${m.subject}"`;
+                const off = jev.whyOff() || (m.html.trim() ? '' : 'the email has no HTML part');
+                if (off) return this.skipped(label, off);
+                const ctx = await context(this.r, { name: 'email', width: 700, height: 1000, mobile: false }, false, false, { javaScriptEnabled: false });
+                try {
+                    const page = await ctx.newPage();
+                    mkdirSync(`${this.r.dir}/shots`, { recursive: true });
+                    const shots: string[] = [];
+                    for (const [suffix, width] of [['', 700], ['-mobile', 390]] as const) {
+                        await page.setViewportSize({ width, height: 1000 });
+                        await page.setContent(m.html, { waitUntil: 'load' });
+                        const height = Math.min(1500, Math.max(300, await page.evaluate(() => document.documentElement.scrollHeight)));
+                        shots.push(`${this.r.dir}/shots/${this.flow.part}-email-${slug(m.subject)}${suffix}.png`);
+                        await page.screenshot({ path: shots.at(-1), fullPage: true, clip: { x: 0, y: 0, width, height } });
+                    }
+                    return await this.look(label, { email_subject: m.subject, screenshot: jev.img(shots[0]), screenshot_mobile: jev.img(shots[1]) }, questions, shots);
+                } finally {
+                    await ctx.close().catch(() => {});
                 }
             },
             /** Deletes every message in Mailpit. */

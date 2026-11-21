@@ -13,7 +13,7 @@ test('config: gates, routes, stub, flows and mail', () => {
     const c = check({ baseUrl: 'http://x', gates: [{ name: 'lint', run: 'true' }, { name: 'audit', run: 'false', warn: true, timeout: 5 }], routes: 'cat routes.json',
         security: { publicWrites: '^/webhooks/' }, stub: { rules: [{ host: 'API.example.com', method: 'post', path: '/v1/*', json: { ok: true } }] }, flows: 'flows/*.ts', mail: { mailpit: 'http://127.0.0.1:8025/' } }, tmp);
     assert.deepEqual(c.gates, [{ name: 'lint', run: 'true', timeout: 600, warn: false }, { name: 'audit', run: 'false', timeout: 5, warn: true }]);
-    assert.deepEqual([c.root, c.routes, c.flows, c.mail.mailpit, c.stub!.port], [tmp, 'cat routes.json', ['flows/*.ts'], 'http://127.0.0.1:8025', 8310]);
+    assert.deepEqual([c.root, c.routes, c.flows, c.mail.mailpit, c.stub!.port], [tmp, 'cat routes.json', ['flows/*.ts'], 'http://127.0.0.1:8025', 8766]);
     assert.deepEqual(c.stub!.rules[0], { host: 'api.example.com', method: 'POST', path: '/v1/*', status: 200, json: { ok: true }, body: undefined, file: undefined, headers: {}, delayMs: 0 });
     assert.ok(c.security.publicWrites!.test('/webhooks/pay'));
     const d = check({ baseUrl: 'http://x' });

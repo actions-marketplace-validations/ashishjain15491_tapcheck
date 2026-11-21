@@ -7,6 +7,7 @@ app:
 audience: someone buying a house plant for the first time
 screens:
   - { name: Home, path: /, purpose: see what the shop sells and how busy it is }
+  - { name: Plants, path: /plants.html, purpose: compare the plants and how much light each needs }
   - { name: Contact, path: /contact.html, purpose: ask the shop a question }
 tasks:
   - name: Ask a question
@@ -27,5 +28,13 @@ stub:
   port: 8766
   rules:
     - { host: api.example.com, path: /v1/plants/*, json: { name: Boston fern, light: shade } }
+  # DNS too, for an app that looks up domains: its address is TAPCHECK_DNS (127.0.0.1:8767, the default port).
+  dns:
+    port: 8767
+    records:
+      - { name: shop.example.com, type: TXT, values: ["plant-shop-verification=fern"] }
+# COVERAGE=1 merges what every run reached into one map: each route above with the part that reached it, or GAP.
+coverage:
+  file: .tapcheck/COVERAGE.md
 # Journeys written for this site. Unlike the suites, a flow may submit forms and change data.
 flows: tests/tapcheck/*.ts

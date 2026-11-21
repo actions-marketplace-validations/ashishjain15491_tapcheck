@@ -23,13 +23,22 @@
  *   DELETE /_tapcheck/fail                          clear the failures
  *   POST   /_tapcheck/reply {host, path?, status?, json? | body?}   answer the next matching request with this, once
  *   DELETE /_tapcheck/reply                         clear the queued replies
+ *   POST   /_tapcheck/dns   {name, type, values}                    answer that DNS question with these values (null: back to the config)
+ *   DELETE /_tapcheck/dns                           forget those
  * Every request is also appended to <out>/stub-requests.jsonl (sign-in headers left out).
+ *
+ * DNS: with `stub.dns`, the same process answers DNS questions over UDP (its address is TAPCHECK_DNS, host:port), so an
+ * app that verifies domains can be pointed at it instead of a real resolver. The answer, first that applies: an override
+ * set through the control API; no such name (NXDOMAIN) for a name containing "tapcheck-fail"; the `records` for that name
+ * and type; `defaultA` for an A question; else no records. Only A, AAAA, MX, TXT, CNAME and NS, one question per message,
+ * UDP only. Each question is logged like a request: method DNS, host the name, path the type, status the DNS rcode.
  */
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createSocket } from 'node:dgram';
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { matchesGlob, resolve } from 'node:path';
-import type { Config, StubRule } from './config.ts';
+import { DNS_TYPES, dnsValue, type Config, type StubRule } from './config.ts';
 
 export type Seen = { t: number; method: string; host: string; path: string; query: Record<string, string>; headers: Record<string, string>; body: unknown; status: number; ms: number };
 export type FailRule = { host?: string; path?: string; status?: number; body?: unknown; times?: number };
@@ -55,6 +64,43 @@ const onHost = (want: string | undefined, host: string) => !want || host === wan
 export const match = (rules: StubRule[], host: string, method: string, path: string) => rules.find((r) => onHost(r.host, host)
     && (!r.method || r.method === method) && (!r.path || (r.path.startsWith('^') ? new RegExp(r.path).test(path) : matchesGlob(path, r.path))));
 
+// ── DNS: just enough of RFC 1035 to answer one question with records of the six types ──
+const QTYPE: Record<number, string> = { 1: 'A', 2: 'NS', 5: 'CNAME', 15: 'MX', 16: 'TXT', 28: 'AAAA' };
+const encName = (n: string) => Buffer.concat([...n.replace(/\.$/, '').split('.').filter(Boolean).map((l) => Buffer.concat([Buffer.from([Buffer.byteLength(l)]), Buffer.from(l)])), Buffer.from([0])]);
+function rdata(type: string, v: string): Buffer {
+    if (type === 'A') return Buffer.from(v.split('.').map(Number));
+    if (type === 'AAAA') { // hex groups, with at most one :: standing for the zero groups left out
+        const [head, tail] = v.split('::').map((x) => (x ? x.split(':') : []));
+        const groups = tail ? [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail] : head;
+        return Buffer.from(groups.flatMap((g) => { const n = parseInt(g, 16); return [n >> 8, n & 255]; }));
+    }
+    if (type === 'MX') { const [, pri, name] = v.match(/^(?:(\d+)\s+)?(\S+)$/)!; const b = Buffer.alloc(2); b.writeUInt16BE(Number(pri ?? 10)); return Buffer.concat([b, encName(name)]); }
+    if (type === 'TXT') { // character strings of at most 255 bytes each
+        const s = Buffer.from(v), parts: Buffer[] = [];
+        for (let i = 0; i < s.length || i === 0; i += 255) { const c = s.subarray(i, i + 255); parts.push(Buffer.from([c.length]), c); }
+        return Buffer.concat(parts);
+    }
+    return encName(v); // CNAME, NS
+}
+/** The question in a DNS message (lower-cased name, type by name or ''), or null when it isn't a plain query. */
+export function dnsQuestion(msg: Buffer): { name: string; type: string; end: number } | null {
+    if (msg.length < 17 || msg[2] & 0xf8 || msg.readUInt16BE(4) !== 1) return null; // a response, another opcode, or not one question
+    const labels: string[] = [];
+    let off = 12;
+    while (msg[off]) { if (msg[off] > 63 || off + msg[off] + 5 >= msg.length) return null; labels.push(msg.subarray(off + 1, off + 1 + msg[off]).toString()); off += msg[off] + 1; }
+    return { name: labels.join('.').toLowerCase(), type: QTYPE[msg.readUInt16BE(off + 1)] ?? '', end: off + 5 };
+}
+/** The reply to `msg`: its question, then one record per value (the name is a pointer back to the question). */
+export function dnsReply(msg: Buffer, q: { type: string; end: number }, values: string[], rcode = 0): Buffer {
+    const head = Buffer.alloc(12);
+    head.writeUInt16BE(msg.readUInt16BE(0), 0); head.writeUInt16BE(0x8180 | rcode, 2); head.writeUInt16BE(1, 4); head.writeUInt16BE(values.length, 6);
+    return Buffer.concat([head, msg.subarray(12, q.end), ...values.map((v) => {
+        const d = rdata(q.type, v), h = Buffer.alloc(12);
+        h.writeUInt16BE(0xc00c, 0); h.writeUInt16BE(msg.readUInt16BE(q.end - 4), 2); h.writeUInt16BE(1, 4); h.writeUInt16BE(d.length, 10); // TTL 0 (the zeroes at 6): never cached, so an override shows at once
+        return Buffer.concat([h, d]);
+    })]);
+}
+
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
     const raw = typeof body === 'string' || Buffer.isBuffer(body);
     res.writeHead(status, { 'content-type': raw ? TYPES.txt : TYPES.json, ...headers }).end(raw ? body : JSON.stringify(body));
@@ -64,12 +110,22 @@ function send(res: ServerResponse, status: number, body: unknown, headers: Recor
 /** Starts the stub on 127.0.0.1; `out` is where stub-requests.jsonl goes, `root` what rule files are relative to. */
 export async function start(cfg: NonNullable<Config['stub']>, out: string, root = process.cwd()) {
     const log: Seen[] = [], fails: FailRule[] = [], replies: Reply[] = [];
+    const dnsOver = new Map<string, string[]>(); // "name|TYPE" → values, set through the control API
     const file = `${out}/stub-requests.jsonl`;
     mkdirSync(out, { recursive: true });
     writeFileSync(file, '');
     let port = cfg.port;
 
     function control(method: string, path: string, q: URLSearchParams, body: any, res: ServerResponse) {
+        if (path === '/_tapcheck/dns') {
+            if (method === 'DELETE') { dnsOver.clear(); return send(res, 200, { ok: true }); }
+            if (!cfg.dns) return send(res, 400, { error: 'tapcheck stub: tapcheck.yml has no stub.dns' });
+            const type = String(body?.type ?? '').toUpperCase(), key = `${String(body?.name ?? '').toLowerCase().replace(/\.$/, '')}|${type}`;
+            const ok = method === 'POST' && body?.name && (DNS_TYPES as readonly string[]).includes(type) && (body.values === null || (Array.isArray(body.values) && body.values.every((x: unknown) => dnsValue(type, x))));
+            if (!ok) return send(res, 400, { error: `tapcheck stub: POST {name, type (${DNS_TYPES.join(', ')}), values: [..] or null}` });
+            if (body.values === null) dnsOver.delete(key); else dnsOver.set(key, body.values);
+            return send(res, 200, { ok: true });
+        }
         const list = path === '/_tapcheck/fail' ? fails : path === '/_tapcheck/reply' ? replies : path === '/_tapcheck/requests' ? log : null;
         if (!list) return send(res, 404, { error: 'tapcheck stub: no such control path' });
         if (method === 'DELETE') { list.length = 0; return send(res, 200, { ok: true }); }
@@ -117,14 +173,35 @@ export async function start(cfg: NonNullable<Config['stub']>, out: string, root 
         }
         const seen: Seen = { t, method, host, path, query: Object.fromEntries(u.searchParams), body: typeof body === 'string' ? body.slice(0, 65_536) : body, status, ms: Date.now() - t,
             headers: Object.fromEntries(Object.entries(req.headers).filter(([k]) => !SECRET.test(k)).map(([k, v]) => [k, String(v)])) };
+        keep(seen);
+    });
+    function keep(seen: Seen) {
         log.push(seen);
         if (log.length > 5000) log.shift();
         appendFileSync(file, JSON.stringify(seen) + '\n');
-    });
+    }
     await new Promise<void>((done, failed) => {
         server.once('error', (e) => failed(new Error(`The stub can't listen on 127.0.0.1:${cfg.port} (stub.port): ${e.message}`)));
         server.listen(cfg.port, '127.0.0.1', done);
     });
     port = (server.address() as AddressInfo).port;
-    return { url: `http://127.0.0.1:${port}`, stop: () => new Promise<void>((done) => { server.closeAllConnections(); server.close(() => done()); }) };
+
+    const d = cfg.dns, udp = d ? createSocket('udp4') : null;
+    if (d && udp) {
+        udp.on('message', (msg, from) => {
+            const q = dnsQuestion(msg);
+            if (!q) return;
+            const over = dnsOver.get(`${q.name}|${q.type}`), gone = !over && q.name.includes('tapcheck-fail');
+            const values = over ?? (gone || !q.type ? [] : d.records.filter((r) => r.name === q.name && r.type === q.type).flatMap((r) => r.values));
+            if (!over && !gone && !values.length && q.type === 'A' && d.defaultA) values.push(d.defaultA);
+            udp.send(dnsReply(msg, q, values, gone ? 3 : 0), from.port, from.address);
+            keep({ t: Date.now(), method: 'DNS', host: q.name, path: q.type, query: {}, headers: {}, body: values, status: gone ? 3 : 0, ms: 0 });
+        });
+        await new Promise<void>((done, failed) => {
+            udp.once('error', (e) => { server.close(); failed(new Error(`The stub's DNS can't listen on 127.0.0.1:${d.port} (stub.dns.port): ${e.message}`)); });
+            udp.bind(d.port, '127.0.0.1', done);
+        });
+    }
+    return { url: `http://127.0.0.1:${port}`, dns: udp ? `127.0.0.1:${udp.address().port}` : undefined,
+        stop: () => new Promise<void>((done) => { udp?.close(); server.closeAllConnections(); server.close(() => done()); }) };
 }

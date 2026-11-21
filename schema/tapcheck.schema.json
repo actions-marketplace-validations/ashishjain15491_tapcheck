@@ -16,10 +16,12 @@
             "description": "How to start, stop and reset the app.",
             "type": "object",
             "additionalProperties": false,
+            "not": { "description": "resetWhen needs reset.", "required": ["resetWhen"], "properties": { "resetWhen": { "minItems": 1 } }, "not": { "required": ["reset"] } },
             "properties": {
                 "start": { "$ref": "#/definitions/text", "description": "Shell command that starts the app. Skipped when the app already answers at `ready`; its whole process group is stopped after the run." },
                 "stop": { "$ref": "#/definitions/text", "description": "Optional extra shell command run after the run." },
-                "reset": { "$ref": "#/definitions/text", "description": "Shell command that puts the test data back. Runs first when RESET=1; refused unless baseUrl is localhost, 127.0.0.1, *.localhost or *.test." },
+                "reset": { "$ref": "#/definitions/text", "description": "Shell command that puts the test data back. Runs first when RESET=1 (or when resetWhen says so); refused unless baseUrl is localhost, 127.0.0.1, *.localhost or *.test." },
+                "resetWhen": { "description": "Globs on paths from the git root (the migrations and seed files, say). `reset` runs before a run when a matching file changed since the last reset, and on first use. Needs `reset`; ignored outside git.", "type": "array", "items": { "$ref": "#/definitions/text" }, "default": [] },
                 "ready": { "$ref": "#/definitions/text", "description": "A path that answers once the app is up; any status under 500 counts.", "default": "/" },
                 "timeout": { "description": "Seconds to wait for `ready` after `start`.", "type": "number", "exclusiveMinimum": 0, "default": 120 },
                 "allowRemoteReset": { "description": "true lets RESET=1 run against an address that isn't local. Only for a remote throwaway copy.", "type": "boolean", "default": false }
@@ -33,7 +35,7 @@
             "default": { "public": {} },
             "propertyNames": {
                 "pattern": "^[a-z][a-z0-9-]*$",
-                "not": { "enum": ["crawl", "contract", "security", "a11y", "ux", "usability", "code", "flow", "jev", "measured"] }
+                "not": { "enum": ["crawl", "contract", "security", "a11y", "interact", "audit", "ux", "usability", "code", "flow", "jev", "measured"] }
             },
             "additionalProperties": {
                 "type": ["object", "null"],
@@ -45,7 +47,7 @@
             }
         },
         "screens": {
-            "description": "The pages a11y and ux audit and the crawl starts from: a list for every side, or a map of side name to list. With none, all three use /.",
+            "description": "The pages a11y, audit and ux check and the crawl starts from: a list for every side, or a map of side name to list. With none, all four use /.",
             "oneOf": [
                 { "type": "array", "items": { "$ref": "#/definitions/screen" } },
                 { "type": "object", "additionalProperties": { "type": "array", "items": { "$ref": "#/definitions/screen" } } }
@@ -75,6 +77,35 @@
                 }
             }
         },
+        "interact": {
+            "description": "The interact suite: every safe control on the crawled screens is clicked, dialogs and tables are tried.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "max": { "description": "Most crawled screens clicked through per side.", "type": "integer", "minimum": 1, "default": 40 },
+                "submit": { "description": "true also submits dialog forms the app itself must refuse or accept, with invalid and then valid input. That changes data: only for a throwaway database, as with app.reset; ignored unless the app is local or app.allowRemoteReset is set.", "type": "boolean", "default": false }
+            }
+        },
+        "audit": {
+            "description": "The audit suite: the full UI audit of the screens.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "max": { "description": "Most crawled pages audited per side on top of the screens. 0: the screens only. Needs the crawl in the same run.", "type": "integer", "minimum": 0, "default": 0 },
+                "skip": { "$ref": "#/definitions/text", "description": "Regular expression (case-insensitive) of paths the audit leaves out, e.g. a canvas or an editor: /(editor|canvas)(/|$)." }
+            }
+        },
+        "design": {
+            "description": "The design tokens. The audit lists computed styles that are not among them as warnings; a list left out isn't checked.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "colors": { "description": "Hex colours, in quotes: \"#1f2937\". Text, background and border colours are held to them.", "type": "array", "items": { "type": "string", "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" } },
+                "fonts": { "description": "Font family names; the first family of each text is held to them.", "type": "array", "items": { "$ref": "#/definitions/text" } },
+                "radii": { "description": "Corner radii in px.", "type": "array", "items": { "type": "number", "minimum": 0 } },
+                "spacing": { "description": "Paddings, vertical margins and gaps in px.", "type": "array", "items": { "type": "number", "minimum": 0 } }
+            }
+        },
         "security": {
             "type": "object",
             "additionalProperties": false,
@@ -95,7 +126,7 @@
             }
         },
         "viewports": {
-            "description": "The screen sizes a11y and ux run on; the first is used by the crawl and flows.",
+            "description": "The screen sizes a11y and ux run on; the first is used by the crawl and flows, the first that isn't mobile by interact, audit and usability (audit adds a 768 px tablet and a 375 px phone of its own).",
             "type": "array",
             "minItems": 1,
             "items": {
@@ -133,7 +164,7 @@
         "changes": {
             "description": "For CHANGED=1: which files each suite depends on, as globs on paths from the git root. \"*\" adds to every suite; a suite with no globs reruns on any change.",
             "type": "object",
-            "propertyNames": { "enum": ["*", "crawl", "contract", "security", "a11y", "ux", "usability", "code", "flow"] },
+            "propertyNames": { "enum": ["*", "crawl", "contract", "security", "a11y", "interact", "audit", "ux", "usability", "code", "flow"] },
             "additionalProperties": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/text" } },
             "default": {}
         },
@@ -159,7 +190,7 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8310 },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8766 },
                 "rules": {
                     "description": "The first matching rule answers; anything unmatched gets 200 {}.",
                     "type": "array",
@@ -181,6 +212,48 @@
                             "description": "A rule takes one of json, body or file.",
                             "anyOf": [{ "required": ["json", "body"] }, { "required": ["json", "file"] }, { "required": ["body", "file"] }]
                         }
+                    },
+                    "default": []
+                },
+                "dns": {
+                    "description": "Also answer DNS questions over UDP, for an app that looks up domains. Its address is TAPCHECK_DNS (host:port). A name containing tapcheck-fail doesn't exist.",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8767 },
+                        "records": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["name", "type", "values"],
+                                "properties": {
+                                    "name": { "$ref": "#/definitions/text", "description": "The full name asked for, such as shop.example.com." },
+                                    "type": { "enum": ["A", "AAAA", "MX", "TXT", "CNAME", "NS", "a", "aaaa", "mx", "txt", "cname", "ns"] },
+                                    "values": { "description": "A, AAAA: addresses. MX: a mail host, or \"<priority> <host>\". TXT: the text. CNAME, NS: a host name.", "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/text" } }
+                                }
+                            },
+                            "default": []
+                        },
+                        "defaultA": { "description": "The IPv4 address answered for an A question no record covers. Without it such a question gets no records.", "type": "string", "pattern": "^(\\d{1,3}\\.){3}\\d{1,3}$" }
+                    }
+                }
+            }
+        },
+        "coverage": {
+            "description": "COVERAGE=1: the coverage map merged from every run's hits.json.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "file": { "$ref": "#/definitions/text", "description": "Where the map is written, from this file's folder.", "default": "COVERAGE.md" },
+                "reasons": {
+                    "description": "Gaps that are there on purpose: a route (as \"GET /path\") matching `match` is listed with `why` instead of GAP.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["match", "why"],
+                        "properties": { "match": { "$ref": "#/definitions/text", "description": "A regular expression (case-insensitive)." }, "why": { "$ref": "#/definitions/text" } }
                     },
                     "default": []
                 }

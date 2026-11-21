@@ -35,7 +35,9 @@ published: `npm pack --dry-run`.
 - **Fictional examples only**: `example.com` hosts, made-up shops and people, keys that are plainly fake.
 - **No new runtime dependencies** without discussing it first. The source keeps to syntax Node.js can strip (no
   enums, no parameter properties); `npm run typecheck` enforces it.
-- The built-in suites only read. A change that makes a suite submit, delete or send anything won't be merged.
+- The built-in suites only read. A change that makes a suite submit, delete or send anything won't be merged. The
+  one switch is `interact.submit`, off by default and refused for an app that isn't local; `interact` otherwise
+  never clicks a control with an UNSAFE label or the submit button of a form that POSTs.
 - Jev judges and code decides: thresholds and verdicts live in code (`src/jev.ts`), and an unsure answer is a
   warning, never a pass.
 - Tests never call TypeSafe: pass a fake client to `setup()` as `test/jev.test.ts` does. Never read, print or commit

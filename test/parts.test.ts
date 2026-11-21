@@ -4,34 +4,36 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
-import { build, changedParts, mark, select, snapshot, withNeeds, type State } from '../src/parts.ts';
+import { build, changedParts, mark, resetDue, select, snapshot, withNeeds, type State } from '../src/parts.ts';
 
 const PARTS = build(['customer', 'staff']);
 const names = (only: string, skip = '') => withNeeds(PARTS, select(PARTS, only ? only.split(',') : [], skip ? skip.split(',') : [])).map((p) => p.name);
 
 test('parts: one per suite and side, tagged, in run order', () => {
-    assert.deepEqual(PARTS.slice(0, 7).map((p) => p.name), ['crawl-customer', 'contract-customer', 'security-customer', 'a11y-customer', 'ux-customer', 'usability-customer', 'crawl-staff']);
+    assert.deepEqual(PARTS.slice(0, 9).map((p) => p.name), ['crawl-customer', 'contract-customer', 'security-customer', 'a11y-customer', 'interact-customer', 'audit-customer', 'ux-customer', 'usability-customer', 'crawl-staff']);
     assert.deepEqual(PARTS.find((p) => p.name === 'ux-staff')!.tags, ['ux', 'staff', 'jev']);
     assert.deepEqual(PARTS.find((p) => p.name === 'contract-staff')!.tags, ['contract', 'staff', 'measured']);
+    assert.deepEqual(PARTS.find((p) => p.name === 'audit-staff')!.tags, ['audit', 'staff', 'measured']);
 });
 
 test('select: names, tags, * prefix, SKIP after ONLY, unknown keys', () => {
-    assert.equal(names('').length, 12);
+    assert.equal(names('').length, 16);
     assert.deepEqual(names('a11y-staff'), ['a11y-staff']);
     assert.deepEqual(names('a11y'), ['a11y-customer', 'a11y-staff']);
     assert.deepEqual(names('jev'), ['ux-customer', 'usability-customer', 'ux-staff', 'usability-staff']);
     assert.deepEqual(names('u*'), ['ux-customer', 'usability-customer', 'ux-staff', 'usability-staff']);
     assert.deepEqual(names('ux-*,a11y-staff'), ['ux-customer', 'a11y-staff', 'ux-staff']); // run order, not ONLY order
-    assert.deepEqual(names('staff', 'jev,crawl'), ['crawl-staff', 'contract-staff', 'security-staff', 'a11y-staff']); // contract needs the crawl back
-    assert.deepEqual(names('measured', 'security,staff'), ['crawl-customer', 'contract-customer', 'a11y-customer']);
+    assert.deepEqual(names('staff', 'jev,crawl'), ['crawl-staff', 'contract-staff', 'security-staff', 'a11y-staff', 'interact-staff', 'audit-staff']); // contract needs the crawl back
+    assert.deepEqual(names('measured', 'security,staff'), ['crawl-customer', 'contract-customer', 'a11y-customer', 'interact-customer', 'audit-customer']);
     assert.deepEqual(names('', 'customer,staff'), []);
     assert.throws(() => names('nope'), /No part or tag called nope\. Run with LIST=1/);
     assert.throws(() => names('ux', 'e2e,zz*'), /No part or tag called e2e, zz\*/);
 });
 
-test('needs: contract and security bring the crawl on their own side', () => {
+test('needs: contract, security and interact bring the crawl on their own side', () => {
     assert.deepEqual(names('security-staff'), ['crawl-staff', 'security-staff']);
     assert.deepEqual(names('contract'), ['crawl-customer', 'contract-customer', 'crawl-staff', 'contract-staff']);
+    assert.deepEqual(names('interact-staff,audit-staff'), ['crawl-staff', 'interact-staff', 'audit-staff']);
     assert.deepEqual(names('ux-customer'), ['ux-customer']);
 });
 
@@ -39,11 +41,11 @@ test('code and flows: code has no side and comes first, each flow is a part on i
     const parts = build(['customer', 'staff'], { code: true, flows: [{ part: 'flow-invite', side: 'staff' }, { part: 'flow-check-out', side: 'customer' }, { part: 'flow-sign-up', side: 'customer' }] });
     const pick = (only: string, skip = '') => withNeeds(parts, select(parts, only ? only.split(',') : [], skip ? skip.split(',') : [])).map((p) => p.name);
     assert.deepEqual(parts[0], { name: 'code', suite: 'code', side: '', tags: ['code', 'measured'], needs: [] });
-    assert.deepEqual(parts.slice(6, 9).map((p) => p.name), ['usability-customer', 'flow-check-out', 'flow-sign-up']);
+    assert.deepEqual(parts.slice(8, 11).map((p) => p.name), ['usability-customer', 'flow-check-out', 'flow-sign-up']);
     assert.deepEqual(parts.at(-1), { name: 'flow-invite', suite: 'flow', side: 'staff', tags: ['flow', 'staff', 'measured'], needs: [] });
     assert.deepEqual(pick('code'), ['code']);
     assert.deepEqual(pick('flow'), ['flow-check-out', 'flow-sign-up', 'flow-invite']);
-    assert.deepEqual(pick('customer', 'jev,crawl,contract,security,a11y'), ['flow-check-out', 'flow-sign-up']); // a side's tag never brings code
+    assert.deepEqual(pick('customer', 'jev,crawl,contract,security,a11y,interact,audit'), ['flow-check-out', 'flow-sign-up']); // a side's tag never brings code
     assert.deepEqual(pick('measured', 'customer,staff'), ['code']);
     assert.ok(!build(['customer']).some((p) => p.name === 'code'), 'no gates and no routes: no code part');
 
@@ -74,7 +76,7 @@ test('cli: LIST shows the code and flow parts; a code-only run starts no app and
     assert.equal(listed.status, 0, listed.stderr);
     assert.deepEqual(listed.stdout.trim().split('\n').map((l) => l.replace(/\s+/g, ' ')),
         ['▶ code code, measured', ' crawl-public crawl, public, measured', ' contract-public contract, public, measured', ' security-public security, public, measured',
-            ' a11y-public a11y, public, measured', ' ux-public ux, public, jev', ' usability-public usability, public, jev', '▶ flow-sign-up flow, public, measured']);
+            ' a11y-public a11y, public, measured', ' interact-public interact, public, measured', ' audit-public audit, public, measured', ' ux-public ux, public, jev', ' usability-public usability, public, jev', '▶ flow-sign-up flow, public, measured']);
 
     const run = cli({ ONLY: 'code' });
     assert.match(run.stdout, /Running: code\n/);
@@ -121,14 +123,14 @@ test('CHANGED: only the parts whose files changed since they last passed', () =>
     const state: State = { parts: Object.fromEntries(parts.map((p) => [p.name, snap])) };
 
     assert.deepEqual(changed(state), [], 'unchanged');
-    assert.deepEqual(changed({ parts: {} }), ['crawl', 'contract', 'security', 'a11y', 'ux', 'usability'], 'never passed');
+    assert.deepEqual(changed({ parts: {} }), ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'ux', 'usability'], 'never passed');
     put('.tapcheck/run-1/findings.json', '[]');
     assert.deepEqual(changed(state, {}), [], "tapcheck's own output doesn't count");
 
     put('site.css', '2'); // tracked, modified, not committed
     assert.deepEqual(changed(state), ['a11y'], 'only the suite whose glob matches');
-    assert.deepEqual(changed(state, {}), ['crawl', 'contract', 'security', 'a11y', 'ux', 'usability'], 'no globs: any change');
-    assert.deepEqual(changed(state, { ux: ['views/**'] }), ['crawl', 'contract', 'security', 'a11y', 'usability'], 'a suite without globs reruns on any change');
+    assert.deepEqual(changed(state, {}), ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'ux', 'usability'], 'no globs: any change');
+    assert.deepEqual(changed(state, { ux: ['views/**'] }), ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'usability'], 'a suite without globs reruns on any change');
 
     const snap2 = snapshot(cwd)!; // a11y passed with the new CSS
     assert.notEqual(snap2.snapshot, snap.snapshot);
@@ -138,13 +140,13 @@ test('CHANGED: only the parts whose files changed since they last passed', () =>
     put('views/home.html', '1'); // untracked and new since the snapshot
     assert.deepEqual(changed(state), ['ux']);
     put('src/new.js', '1');
-    assert.deepEqual(changed(state), ['crawl', 'contract', 'security', 'a11y', 'ux', 'usability'], '"*" globs are every suite\'s');
+    assert.deepEqual(changed(state), ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'ux', 'usability'], '"*" globs are every suite\'s');
 
     git('add', '.'); git('commit', '-qm', 'two');
     for (const p of parts) state.parts[p.name] = snapshot(cwd)!;
     assert.deepEqual(changed(state), []);
     put('tapcheck.yml', 'baseUrl: http://y');
-    assert.deepEqual(changed(state), ['crawl', 'contract', 'security', 'a11y', 'ux', 'usability'], 'the config file reruns everything');
+    assert.deepEqual(changed(state), ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'ux', 'usability'], 'the config file reruns everything');
     git('checkout', '-q', 'tapcheck.yml');
 
     state.parts['security-public'] = { snapshot: '0123456789abcdef0123456789abcdef01234567', untracked: [] };
@@ -156,7 +158,31 @@ test('CHANGED: only the parts whose files changed since they last passed', () =>
     const inner = { ...at, cwd: `${cwd}/app` };
     const fresh: State = { parts: Object.fromEntries(parts.map((p) => [p.name, snapshot(inner.cwd)!])) };
     put('src/app.js', '2');
-    assert.deepEqual(changedParts(parts, fresh, { ux: ['app/**'] }, inner).map((p) => p.suite), ['crawl', 'contract', 'security', 'a11y', 'usability']);
+    assert.deepEqual(changedParts(parts, fresh, { ux: ['app/**'] }, inner).map((p) => p.suite), ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'usability']);
     put('app/tapcheck.yml', 'baseUrl: http://z');
-    assert.equal(changedParts(parts, fresh, { ux: ['app/**'] }, inner).length, 6);
+    assert.equal(changedParts(parts, fresh, { ux: ['app/**'] }, inner).length, 8);
+});
+
+test('app.resetWhen: a reset is due on first use and when a matching file changed since the last one', () => {
+    const cwd = mkdtempSync(`${tmpdir()}/tapcheck-reset-`);
+    const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...a], { cwd, stdio: 'pipe' });
+    const put = (file: string, text: string) => { mkdirSync(dirname(`${cwd}/${file}`), { recursive: true }); writeFileSync(`${cwd}/${file}`, text); };
+    git('init', '-q');
+    put('database/seed.sql', '1'); put('src/app.js', '1');
+    git('add', '.'); git('commit', '-qm', 'one');
+    const globs = ['database/**', '*.seed.json'];
+    const state: State = { parts: {} };
+    assert.equal(resetDue(state, globs, cwd), 'first use');
+    state.reset = snapshot(cwd)!;
+    assert.equal(resetDue(state, globs, cwd), null, 'nothing changed');
+    put('src/app.js', '2'); put('notes.txt', 'new');
+    assert.equal(resetDue(state, globs, cwd), null, 'changes elsewhere');
+    put('database/seed.sql', '2'); // tracked, not committed
+    assert.equal(resetDue(state, globs, cwd), 'database/seed.sql changed since the last reset');
+    state.reset = snapshot(cwd)!;
+    assert.equal(resetDue(state, globs, cwd), null, 'reset at this code');
+    put('users.seed.json', '[]'); // untracked and new
+    assert.equal(resetDue(state, globs, cwd), 'users.seed.json changed since the last reset');
+    state.reset = { snapshot: '0123456789abcdef0123456789abcdef01234567', untracked: [] };
+    assert.equal(resetDue(state, globs, cwd), 'the snapshot of the last reset is gone');
 });

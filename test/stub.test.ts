@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Resolver } from 'node:dns/promises';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { after, test } from 'node:test';
@@ -9,13 +10,13 @@ const tmp = mkdtempSync(`${tmpdir()}/tapcheck-stub-`);
 const rule = (r: Partial<StubRule>): StubRule => ({ status: 200, headers: {}, delayMs: 0, ...r });
 
 test('stub: which outside host a request was meant for', () => {
-    assert.deepEqual(target({ host: '127.0.0.1:8310', 'x-forwarded-host': 'API.Example.com:443, proxy' }, '/v1/x', 8310), { host: 'api.example.com', path: '/v1/x' });
-    assert.deepEqual(target({ host: 'hooks.example.org' }, '/in', 8310), { host: 'hooks.example.org', path: '/in' });
-    assert.deepEqual(target({ host: 'localhost:9999' }, '/in', 8310), { host: 'localhost', path: '/in' }); // another port isn't the stub's own
-    assert.deepEqual(target({ host: '127.0.0.1:8310' }, '/api.example.com/v1/x', 8310), { host: 'api.example.com', path: '/v1/x' });
-    assert.deepEqual(target({ host: 'localhost:8310' }, '/api.example.com', 8310), { host: 'api.example.com', path: '/' });
-    assert.deepEqual(target({ host: '127.0.0.1:8310' }, '/_tapcheck/requests', 8310), { host: '', path: '/_tapcheck/requests' });
-    assert.deepEqual(target({ host: '127.0.0.1:8310' }, '/v1.2/items', 8310), { host: '', path: '/v1.2/items' });
+    assert.deepEqual(target({ host: '127.0.0.1:8766', 'x-forwarded-host': 'API.Example.com:443, proxy' }, '/v1/x', 8766), { host: 'api.example.com', path: '/v1/x' });
+    assert.deepEqual(target({ host: 'hooks.example.org' }, '/in', 8766), { host: 'hooks.example.org', path: '/in' });
+    assert.deepEqual(target({ host: 'localhost:9999' }, '/in', 8766), { host: 'localhost', path: '/in' }); // another port isn't the stub's own
+    assert.deepEqual(target({ host: '127.0.0.1:8766' }, '/api.example.com/v1/x', 8766), { host: 'api.example.com', path: '/v1/x' });
+    assert.deepEqual(target({ host: 'localhost:8766' }, '/api.example.com', 8766), { host: 'api.example.com', path: '/' });
+    assert.deepEqual(target({ host: '127.0.0.1:8766' }, '/_tapcheck/requests', 8766), { host: '', path: '/_tapcheck/requests' });
+    assert.deepEqual(target({ host: '127.0.0.1:8766' }, '/v1.2/items', 8766), { host: '', path: '/v1.2/items' });
 });
 
 test('stub: the first matching rule wins', () => {
@@ -103,4 +104,48 @@ test('example: the static site\'s stub rule answers', async () => {
     after(() => stub.stop());
     assert.deepEqual(await (await fetch(`${stub.url}/api.example.com/v1/plants/7`)).json(), { name: 'Boston fern', light: 'shade' });
     assert.deepEqual(await (await fetch(`${stub.url}/api.example.com/v2/other`)).json(), {});
+});
+
+test('stub: DNS over UDP answers the configured records, overrides from the control API, and the fail name', async () => {
+    const long = `v=spf1 ${'include:spf.example.net '.repeat(12)}-all`; // past 255 bytes: sent as two strings
+    const stub = await start({ port: 0, rules: [], dns: { port: 0, defaultA: '203.0.113.7', records: [
+        { name: 'shop.example.com', type: 'A', values: ['192.0.2.10', '192.0.2.11'] }, { name: 'shop.example.com', type: 'AAAA', values: ['2001:db8::1'] },
+        { name: 'shop.example.com', type: 'MX', values: ['20 mx.example.com', 'backup.example.com'] }, { name: 'shop.example.com', type: 'TXT', values: ['site-verification=abc', long] },
+        { name: 'www.example.com', type: 'CNAME', values: ['shop.example.com'] }, { name: 'example.com', type: 'NS', values: ['ns1.example.net'] }] } }, tmp);
+    after(() => stub.stop());
+    const dns = new Resolver({ timeout: 2000, tries: 1 });
+    dns.setServers([stub.dns!]);
+    assert.deepEqual(await dns.resolve4('Shop.Example.com'), ['192.0.2.10', '192.0.2.11']);
+    assert.deepEqual(await dns.resolve6('shop.example.com'), ['2001:db8::1']);
+    assert.deepEqual((await dns.resolveMx('shop.example.com')).map((m) => [m.priority, m.exchange]), [[20, 'mx.example.com'], [10, 'backup.example.com']]);
+    assert.deepEqual((await dns.resolveTxt('shop.example.com')).map((parts) => parts.join('')), ['site-verification=abc', long]);
+    assert.deepEqual(await dns.resolveCname('www.example.com'), ['shop.example.com']);
+    assert.deepEqual(await dns.resolveNs('example.com'), ['ns1.example.net']);
+    assert.deepEqual(await dns.resolve4('anything.example.org'), ['203.0.113.7']); // defaultA
+    await assert.rejects(dns.resolveMx('anything.example.org'), { code: 'ENODATA' });
+    await assert.rejects(dns.resolve4('tapcheck-fail.example.org'), { code: 'ENOTFOUND' });
+
+    const set = (body: unknown, method = 'POST') => fetch(`${stub.url}/_tapcheck/dns`, { method, headers: { 'content-type': 'application/json' }, body: method === 'POST' ? JSON.stringify(body) : undefined }).then((res) => res.status);
+    assert.equal(await set({ name: 'shop.example.com', type: 'a', values: ['198.51.100.1'] }), 200);
+    assert.equal(await set({ name: 'new.example.com', type: 'TXT', values: ['hello'] }), 200);
+    assert.deepEqual(await dns.resolve4('shop.example.com'), ['198.51.100.1']);
+    assert.deepEqual(await dns.resolveTxt('new.example.com'), [['hello']]);
+    assert.equal(await set({ name: 'shop.example.com', type: 'A', values: null }), 200); // back to the config
+    assert.deepEqual(await dns.resolve4('shop.example.com'), ['192.0.2.10', '192.0.2.11']);
+    assert.equal(await set({ name: 'shop.example.com', type: 'A', values: ['not an address'] }), 400);
+    assert.equal(await set({ name: 'shop.example.com', type: 'SRV', values: ['x'] }), 400);
+    assert.equal(await set(null, 'DELETE'), 200);
+    await assert.rejects(dns.resolveTxt('new.example.com'), { code: 'ENODATA' });
+
+    // Each question is in the request log, like a request.
+    const seen = await (await fetch(`${stub.url}/_tapcheck/requests?host=tapcheck-fail.example.org`)).json();
+    assert.deepEqual(seen.map((s: any) => [s.method, s.host, s.path, s.status]), [['DNS', 'tapcheck-fail.example.org', 'A', 3]]);
+
+    // Without stub.dns there is no DNS to override, and tapcheck.yml hands the address on as TAPCHECK_DNS.
+    const plain = await start({ port: 0, rules: [] }, tmp);
+    after(() => plain.stop());
+    assert.equal(plain.dns, undefined);
+    assert.equal((await fetch(`${plain.url}/_tapcheck/dns`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"name":"a.test","type":"A","values":["192.0.2.1"]}' })).status, 400);
+    writeFileSync(`${tmp}/dns.yml`, 'baseUrl: http://127.0.0.1:1\nstub: { dns: { port: 8399 } }\napp: { start: "DNS=$TAPCHECK_DNS ./serve" }\n');
+    assert.equal(load(`${tmp}/dns.yml`).app.start, 'DNS=127.0.0.1:8399 ./serve');
 });

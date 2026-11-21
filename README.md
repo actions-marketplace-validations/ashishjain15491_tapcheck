@@ -17,13 +17,16 @@ Every suite runs once per side (each kind of person who sees a different app: `p
 | `contract` | code | API calls answering 4xx/5xx, HTML or unparsable JSON sent to a script, slow calls, a response that lost a key since the saved baseline |
 | `security` | code | missing security headers, weak session-cookie flags, pages open when signed out, CSRF not refused, secrets in served HTML or scripts, third-party requests |
 | `a11y` | code | axe-core WCAG 2.2 A/AA violations per screen and viewport, keyboard focus that doesn't move or can't be seen, a missing page language |
+| `interact` | code | every safe control on the crawled screens clicked: page errors, 5xx, native `alert`/`confirm`, controls that do nothing; dialogs without a name, that Escape doesn't close or that take invalid input silently; table sorting, search, paging and row menus that change nothing |
+| `audit` | code, plus Jev's look | the full UI audit per screen: desktop (cut-off text, overlap, small targets, leaked placeholders, headings, alt text, focus ring, opened menus and dialogs), dark mode (contrast, backgrounds left white), tablet and phone (sideways scroll, cut-off text, small targets); across screens, buttons and fields that come in several looks, mixed label case, and styles outside your design tokens |
 | `code` | code | your own linters, type checks and audits (`gates:`), and writing routes that need no sign-in |
 | `flow-<name>` | code | your own journeys (`flows:`), one finding per step |
 | `ux` | Jev | visual QA (overlap, clipping, errors on screen), design (main action, hierarchy, legibility, spacing), usability heuristics, a five-second test, predicted attention |
 | `usability` | Jev | a simulated first-time user tries each task by clicking: reached or not, extra clicks, hesitation, dead clicks |
 
 Jev answers with probabilities and code decides: a clear answer passes or fails, an unsure one is a warning for a
-person to look at, never a pass. Without a Jev key the two Jev suites are skipped and everything else runs.
+person to look at, never a pass. Without a Jev key the two Jev suites and `audit`'s Jev look are skipped and
+everything else runs.
 
 ## Four ways to run it
 
@@ -134,8 +137,19 @@ Secrets never go in the file: write `$NAME` and export the variable; a missing o
 
 Each run writes `<out>/run-<time>/` (`out` is `.tapcheck` by default; git-ignore it): `report.html` to open,
 `REPORT.md` to paste into a pull request, `findings.json` for tools and agents, and the evidence (screenshots,
-`crawl.json`, `network.json`, `axe.json`, `clickstream.json`, `payloads.json`). Exit code 0: no failing check; 1: at
+`crawl.json`, `network.json`, `axe.json`, `interact.json`, `audit.json`, `clickstream.json`, `hits.json`, `payloads.json`). Exit code 0: no failing check; 1: at
 least one; 2: the run couldn't start (a config mistake, the app not answering, Chromium missing).
+
+Watching and recording a run, and coverage across runs:
+
+- `HEADED=1` shows the browser, `SLOWMO=150` slows it by that many milliseconds per action, and `START_DELAY=10`
+  counts down before the first action. The run still ends by itself.
+- `RECORD=1` keeps a video and a Playwright trace of every browser context (suites and flows) under the side's
+  `videos/` and `traces/`; the report links them. Open a trace with `npx playwright show-trace <file>`. Off by default,
+  to keep runs light.
+- `COVERAGE=1 tapcheck` runs nothing: it merges the `hits.json` of every run so far into `COVERAGE.md` next to
+  `tapcheck.yml` (`coverage.file`), each route of `routes:` with the part or flow step that reached it or **GAP**, plus
+  the dialogs and table controls seen. `coverage.reasons: [{match, why}]` marks the gaps that are there on purpose.
 
 ## Beyond the built-in suites
 
@@ -151,13 +165,20 @@ routes: ./bin/routes-json
 
 # Stub: a stand-in for the outside services the app calls. First matching rule answers; anything else gets 200 {}.
 stub:
-  port: 8310
+  port: 8766
   rules:
     - { host: api.example.com, method: POST, path: /v1/charges, status: 201, json: { id: ch_1, paid: true } }
+  dns:                                   # optional: answer DNS over UDP too, at TAPCHECK_DNS (127.0.0.1:8767)
+    records: [{ name: shop.example.com, type: TXT, values: ["v=spf1 -all"] }]
 
 # Flows: your own journeys, one part each.
 flows: tests/tapcheck/*.ts
 mail: { mailpit: http://127.0.0.1:8025 }   # for t.mail in flows
+
+# Interact and audit: how far they go, and the design tokens the audit holds computed styles to.
+interact: { max: 40, submit: false }     # submit: true also sends valid input in dialog forms: throwaway database only
+audit: { max: 0, skip: "/(editor|canvas)(/|$)" }   # max: crawled pages audited on top of the screens
+design: { colors: ["#1f2937", "#ffffff"], fonts: [Inter], radii: [0, 4, 8], spacing: [4, 8, 16, 24] }
 ```
 
 - **Gates** run as the part `code`, which has no side: `ONLY=code tapcheck` starts neither the app nor a browser.
@@ -166,20 +187,28 @@ mail: { mailpit: http://127.0.0.1:8025 }   # for t.mail in flows
 - **Stub**: tapcheck starts it before `app.start` and sets `TAPCHECK_STUB_URL`. Point each provider's base URL at
   `${TAPCHECK_STUB_URL}/<its host>`, for example
   `app.start: PAYMENTS_BASE_URL=${TAPCHECK_STUB_URL}/api.example.com npm start`, and the app never reaches the real
-  service. Flows read what the stub saw and switch failures on through `t.stub`.
+  service. Flows read what the stub saw and switch failures on through `t.stub`. With `stub.dns` it also answers
+  DNS questions (A, AAAA, MX, TXT, CNAME, NS) for an app that looks up domains; `t.stub.dns()` changes an answer.
 - **Flows** are files with `export default { name, side?, run: async (t) => {…} }`; `import type { Flow } from
   'tapcheck'` types them. Each `t.step(name, fn)` is a finding; a failed step keeps a screenshot and the flow carries
-  on. The helpers (`t.goto`, `t.page`, `t.expect`, `t.stub`, `t.routeOutside`, `t.mail`) are described in
-  [src/flow.ts](src/flow.ts).
+  on. The helpers (`t.goto`, `t.page`, `t.expect`, `t.jev`, `t.stub`, `t.routeOutside`, `t.mail`) are described in
+  [src/flow.ts](src/flow.ts). `t.jev(label)` has Jev look at the current page and `t.mail.judge(mail)` at an email;
+  both are skipped (and say so) with `JEV=off` or no key.
+- **Interact** needs its side's crawl (it clicks through the screens the crawl reached, `interact.max` at most) and
+  writes `interact.json`: the controls, dialogs and table controls it exercised.
+- **Audit** checks the configured screens. With `design:`, a computed colour, font, radius or spacing that isn't one
+  of the tokens is a warning, the most used first; a list you leave out isn't checked.
 
 ## Jev: the key, the budget, and what is sent
 
-`ux` and `usability` ask Jev, a paid model from TypeSafe. Put `TYPESAFE_API_KEY` in the environment, or in a `.env`
-file next to `tapcheck.yml` (git-ignored). `JEV=off`, or no key, skips both suites.
+`ux` and `usability` ask Jev, a paid model from TypeSafe, and `audit` asks it to look at each screen and each menu
+or dialog it opens. Put `TYPESAFE_API_KEY` in the environment, or in a `.env` file next to `tapcheck.yml`
+(git-ignored). `JEV=off`, or no key, skips both suites and `audit`'s looks (its measured checks still run).
 
 - **Budget:** a run stops asking once it has spent `jev.budget` US dollars (default 1); `JEV_BUDGET=0.25` sets it
   for one run. The parts left over are marked skipped, and the spend is printed at the end.
-- **What goes to TypeSafe:** screenshots of the screens and task steps you configured, and with them the text of the
+- **What goes to TypeSafe:** screenshots of the screens and task steps you configured and of the menus and dialogs
+  `audit` opens on them, and with them the text of the
   questions: the screen's name and `purpose`, your `audience`, each task's `goal`, `done` and `notDone`, and the
   labels of the controls visible on the page. Nothing else: no page source, cookies, sessions, request bodies or
   environment variables. `payloads.json` in the run folder holds every request as sent (images as file paths).
@@ -189,10 +218,19 @@ file next to `tapcheck.yml` (git-ignored). `JEV=off`, or no key, skips both suit
 
 - The built-in suites only read: they never submit a form or follow a delete, send or sign-out link. The usability
   suite clicks only what Jev clearly judges changes nothing, and never a submit button.
+- **`interact` clicks.** It never clicks a control labelled delete, remove, send, publish, pay, cancel, sign out and
+  the like, a link matching `crawl.skip`, or the submit button of a form that POSTs, and it dismisses native
+  confirms. A button that saves through script alone looks like any other button and is clicked, so run it against
+  test data. `interact.submit: true` goes further: dialog forms are submitted with invalid and then valid input,
+  which changes data. Like `app.reset` it is for a throwaway database, and it is ignored unless the app is local
+  (or `app.allowRemoteReset` is set).
 - **Flows may change data.** They are your code and click what you tell them to: run them against a copy you can
   reset, or leave them out with `SKIP=flow`.
 - `RESET=1` runs `app.reset` first, and refuses unless `baseUrl` is `localhost`, `127.0.0.1`, `*.localhost` or
-  `*.test` (`app.allowRemoteReset: true` lifts that, for a remote throwaway copy only).
+  `*.test` (`app.allowRemoteReset: true` lifts that, for a remote throwaway copy only). With
+  `app.resetWhen: ["database/**"]` the reset also runs by itself, under the same rule, when a matching file changed
+  since the last reset (and on first use); it needs git.
+- `RECORD=1` videos and traces show everything on screen, test data included: share them as carefully as screenshots.
 - Signed-in sessions are saved under `out`; keep that folder out of git and out of artifacts you share.
 
 ## Contributing

@@ -88,6 +88,6 @@ even if the protection is missing; not sign-out, not a delete. Routes in `routes
 
 Stub: `artisan serve` hands the app only a few environment variables (`APP_ENV` among them), so don't set base URLs
 in `app.start`. For providers whose base URL comes from `config/services.php` and an env variable, write the stub's
-address into `.env.testing` instead (`PAYMENTS_BASE_URL=http://127.0.0.1:8310/api.example.com`, with `stub.port: 8310`).
+address into `.env.testing` instead (`PAYMENTS_BASE_URL=http://127.0.0.1:8766/api.example.com`, with `stub.port: 8766`).
 Mail for flows: run Mailpit, set `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1`,
 `MAIL_PORT=1025` in `.env.testing`, and `mail: { mailpit: http://127.0.0.1:8025 }`.

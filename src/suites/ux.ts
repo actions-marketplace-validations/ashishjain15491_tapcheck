@@ -71,6 +71,15 @@ async function heatmap(page: Page, shot: string, looks: { label: string; box: Bo
     await p.close();
 }
 
+/** One finding per VISUAL question in `a` (the audit suite asks them too, of screens and of opened dialogs and menus). */
+export function visual(r: Run, suite: string, where: string, a: Record<string, { noul: number }>, shots: string[]) {
+    for (const [k, defect] of [['loaded', false], ['error_shown', true], ['overlap', true], ['clipped', true], ['raw_key', true], ['misaligned', true]] as const) {
+        if (!a[k]) continue;
+        const v = defect ? bad(a[k].noul) : good(a[k].noul);
+        r.record({ suite, where, check: `visual: ${k.replace('_', ' ')}`, status: status(v), detail: `p=${a[k].noul.toFixed(2)}`, evidence: shots });
+    }
+}
+
 export async function run(r: Run) {
     const screens: Screen[] = r.side.screens.length ? r.side.screens : [{ name: 'Home', path: '/' }];
     const known = translationKeys(r);
@@ -118,10 +127,7 @@ export async function run(r: Run) {
                     const a = await ask(key, { screen: s.name, viewport: `${vp.name}, ${vp.width} × ${vp.height} px`, screenshots: shots.map(img),
                         note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined },
                     { ...VISUAL, ...DESIGN, ...HEURISTICS(r.cfg.audience) }, shots);
-                    for (const [k, defect] of [['loaded', false], ['error_shown', true], ['overlap', true], ['clipped', true], ['raw_key', true], ['misaligned', true]] as const) {
-                        const v = defect ? bad(a[k].noul) : good(a[k].noul);
-                        r.record({ suite: S, where, check: `visual: ${k.replace('_', ' ')}`, status: status(v), detail: `p=${a[k].noul.toFixed(2)}`, evidence: shots });
-                    }
+                    visual(r, S, where, a, shots);
                     for (const k of ['cta', 'cta_label', 'negative_space', 'hierarchy', 'legibility', 'spacing'] as const) scored(r, where, `design: ${k.replace('_', ' ')}`, a[k], shots);
                     const probs = Object.entries(a.density.probabilities ?? {}).map(([k, p]) => `${k} ${(p as number).toFixed(2)}`).join(', ');
                     r.record({ suite: S, where, check: 'design: density', status: a.density.choice === 'balanced' ? 'pass' : 'warn', detail: `${a.density.choice} (${probs})`, evidence: [shots[0]] });

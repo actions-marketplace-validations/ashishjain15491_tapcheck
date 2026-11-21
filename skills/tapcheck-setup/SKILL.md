@@ -39,7 +39,8 @@ from the current folder.
 - Add `.tapcheck/` to the project's `.gitignore` (it holds screenshots and signed-in sessions), and make sure `.env`
   is ignored too. No `.gitignore` yet: create one with those two lines.
 - `app.reset` only for a local, throwaway database. Never point it at shared, staging or production data.
-- tapcheck's own suites only read. Don't add `flows:` during setup unless the user asks: flows may change data.
+- tapcheck's own suites only read. Don't add `flows:` or `interact.submit: true` during setup unless the user asks:
+  both may change data.
 - `$WORD` in capitals anywhere in the file is replaced from the environment when the file loads. In shell commands
   you write there, use lowercase shell variables, or the load fails with "environment variable … is not set".
 - A key tapcheck doesn't know is ignored without a message. Use only the keys in this skill and its references.
@@ -88,7 +89,7 @@ baseUrl: http://127.0.0.1:8000
 app:
   start: <from the recipe>          # skipped when the app already answers; stopped after the run
   ready: /                          # a path that answers once the app is up (any status under 500)
-  reset: <from the recipe>          # optional; only runs with RESET=1, and only against a local address
+  reset: <from the recipe>          # optional; runs with RESET=1 (or by itself with app.resetWhen), and only against a local address
 audience: a shop owner who is not technical
 sides:
   public: {}                        # no sign-in

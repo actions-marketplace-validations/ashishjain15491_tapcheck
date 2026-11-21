@@ -9,10 +9,10 @@ import { SUITES } from './config.ts';
 
 export type Part = { name: string; suite: string; side: string; tags: string[]; needs: string[] }; // side '' for code: no app, no browser
 export type Snap = { snapshot: string; untracked: string[] };
-export type State = { parts: Record<string, Snap> }; // the code each part last passed at
+export type State = { parts: Record<string, Snap>; reset?: Snap }; // the code each part last passed at, and the code at the last app.reset
 
 const JEV = ['ux', 'usability']; // the suites Jev judges
-const NEEDS_CRAWL = ['contract', 'security']; // they read the crawl's records
+const NEEDS_CRAWL = ['contract', 'security', 'interact']; // they read the crawl's records
 
 /** Every part in run order: code (when there is any), then by side its suites and its flows (`part` is a flow's part name). */
 export const build = (sides: string[], extra: { code?: boolean; flows?: { part: string; side: string }[] } = {}): Part[] => [
@@ -56,6 +56,20 @@ export function snapshot(cwd = process.cwd()): Snap | null {
 /** Tracked files changed since the snapshot, as paths from the git root; null when the snapshot is gone (garbage-collected). */
 function diff(cwd: string, snap: string): string[] | null {
     try { return git(cwd, 'diff', '--name-only', snap).split('\n').filter(Boolean); } catch { return null; }
+}
+
+/**
+ * app.resetWhen: why the app's data should be reset before this run, or null when it needn't be. It is due on first use
+ * and when a file matching one of `globs` (paths from the git root) changed since the last reset (`state.reset`).
+ * Call it only where snapshot() works (a git repository with a commit).
+ */
+export function resetDue(state: State, globs: string[], cwd = process.cwd()): string | null {
+    const s = state.reset;
+    if (!s) return 'first use';
+    const tracked = diff(cwd, s.snapshot);
+    if (!tracked) return 'the snapshot of the last reset is gone';
+    const file = [...tracked, ...untracked(cwd).filter((f) => !s.untracked.includes(f))].find((f) => globs.some((g) => matchesGlob(f, g)));
+    return file ? `${file} changed since the last reset` : null;
 }
 
 /**

@@ -3,7 +3,7 @@
  * not), page settling, the facts code can measure on a page, screenshot slices, and the Run each suite is handed.
  */
 import { mkdirSync } from 'node:fs';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from 'playwright';
 import type { Config, Screen, Side } from './config.ts';
 import type { Finding } from './report.ts';
 
@@ -15,31 +15,111 @@ export type Run = {
     cfg: Config; side: Side; dir: string; auth?: string;
     record: (f: Omit<Finding, 'side'>) => void;
     crawl: { pages: Visited[]; hits: Hit[]; done: boolean };
+    part?: string; // the part running now, and inside a flow its step: what a recording and a reached route are filed under
+    step?: string;
+    reached?: Reach[]; // what the run touched, for hits.json and the coverage map (src/coverage.ts)
 };
+/** One thing a part touched: "GET /orders", "dialog <name>", "table <headers>: sort". */
+export type Reach = { part: string; step?: string; what: string };
+export type Recording = { side: string; part: string; label: string; videos: string[]; trace?: string };
+/** Every recording of the run (RECORD=1), for the report. */
+export const recordings: Recording[] = [];
+
+const seconds = (name: string, env: NodeJS.ProcessEnv) => {
+    const n = Number(env[name] ?? 0);
+    if (!(n >= 0)) throw new Error(`${name} must be a number, 0 or more (got "${env[name]}").`);
+    return n;
+};
+/** How the run's browser starts: HEADED=1 shows it, SLOWMO=<ms> waits that long between its actions. */
+export const launchOptions = (env = process.env) => ({ headless: env.HEADED !== '1', slowMo: seconds('SLOWMO', env) });
+/** START_DELAY=<s>: seconds to count down before the first action (time to start a screen recording). */
+export const startDelay = (env = process.env) => seconds('START_DELAY', env);
 
 let browser: Browser | null = null;
-export async function launch(headless = true) {
-    browser ??= await chromium.launch({ headless });
+const live = new Set<BrowserContext>(); // recorded contexts not closed yet
+export async function launch() {
+    browser ??= await chromium.launch(launchOptions());
     return browser;
 }
-export const closeBrowser = async () => { await browser?.close(); browser = null; };
+/** Closes the browser. A recorded context a suite left open is closed first, so its video and trace are still written. */
+export const closeBrowser = async () => {
+    for (const ctx of [...live]) await ctx.close().catch(() => {});
+    await browser?.close();
+    browser = null;
+};
+
+/** Counts down START_DELAY seconds, in the terminal and (headed) in the browser window. */
+export async function countdown(s = startDelay()) {
+    if (!s) return;
+    const ctx = launchOptions().headless ? null : await (await launch()).newContext();
+    const page = await ctx?.newPage();
+    for (let left = Math.ceil(s); left > 0; left--) {
+        process.stdout.write(`\rStarting in ${left} s… `);
+        await page?.setContent(`<body style="font:48px system-ui;display:grid;place-items:center;height:90vh">tapcheck starts in ${left}…</body>`).catch(() => {});
+        await new Promise((done) => setTimeout(done, 1000));
+    }
+    process.stdout.write('\n');
+    await ctx?.close();
+}
+
+/** Files `what` under the part (and flow step) running now, once. */
+export function reach(r: Run, what: string, step = r.step) {
+    const list = (r.reached ??= []), part = r.part ?? '';
+    if (!list.some((x) => x.part === part && x.step === step && x.what === what)) list.push({ part, ...(step ? { step } : {}), what });
+}
+const ASSET = ['image', 'font', 'stylesheet', 'script', 'media', 'manifest'];
 
 /** A screen's address: a path on the side's base URL, or a full URL as given. */
 export const abs = (r: Run, path: string) => (/^https?:\/\//.test(path) ? path : r.side.baseUrl + path);
 export const host = (u: string) => { try { return new URL(u).host; } catch { return ''; } };
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'unlabelled';
 
-/** A context at this viewport: signed in with the side's session unless auth is false. */
-export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = false): Promise<BrowserContext> {
-    return (await launch()).newContext({ ...(auth && r.auth ? { storageState: r.auth } : {}), viewport: { width: vp.width, height: vp.height },
-        deviceScaleFactor: 1, isMobile: vp.mobile, hasTouch: vp.mobile, bypassCSP });
+/**
+ * A context at this viewport: signed in with the side's session unless auth is false. Every suite and flow gets its
+ * contexts here, so two things hold for all of them: each answered request to the side's own host is filed for the
+ * coverage map, and with RECORD=1 the context records a video per page (<side dir>/videos/) and a Playwright trace
+ * (<side dir>/traces/), written when the context closes.
+ */
+export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = false, more: BrowserContextOptions = {}): Promise<BrowserContext> {
+    const record = process.env.RECORD === '1';
+    const ctx = await (await launch()).newContext({ ...(auth && r.auth ? { storageState: r.auth } : {}), viewport: { width: vp.width, height: vp.height },
+        deviceScaleFactor: 1, isMobile: vp.mobile, hasTouch: vp.mobile, bypassCSP, ...(record ? { recordVideo: { dir: `${r.dir}/videos` } } : {}), ...more });
+    const own = host(r.side.baseUrl);
+    // Reached: a request to the app itself that it didn't refuse (401, 403, 405) or not find (404). Page assets aside.
+    ctx.on('response', (res) => {
+        const q = res.request();
+        if (host(q.url()) === own && !ASSET.includes(q.resourceType()) && ![401, 403, 404, 405].includes(res.status())) reach(r, `${q.method()} ${new URL(q.url()).pathname}`);
+    });
+    if (!record) return ctx;
+
+    const label = `${r.part ?? 'run'}-${vp.name}${auth ? '' : '-signed-out'}`;
+    const name = `${String(recordings.length + 1).padStart(3, '0')}-${slug(label).replace(/_/g, '-')}`;
+    const rec: Recording = { side: r.side.name, part: r.part ?? '', label, videos: [], trace: `${r.dir}/traces/${name}.zip` };
+    recordings.push(rec); // now, so the number in the name is taken
+    const pages: Page[] = [];
+    ctx.on('page', (p) => pages.push(p));
+    await ctx.tracing.start({ screenshots: true, snapshots: true, title: label });
+    live.add(ctx);
+    const close = ctx.close.bind(ctx);
+    ctx.close = async (...a) => {
+        if (!live.delete(ctx)) return close(...a);
+        await ctx.tracing.stop({ path: rec.trace }).catch(() => { rec.trace = undefined; });
+        await close(...a); // the videos are complete once the context is closed
+        for (const [i, p] of pages.entries()) {
+            const file = `${r.dir}/videos/${name}${i ? `-${i + 1}` : ''}.webm`;
+            if (await p.video()?.saveAs(file).then(() => true, () => false)) rec.videos.push(file);
+            await p.video()?.delete().catch(() => {}); // the copy under Playwright's own random name
+        }
+    };
+    return ctx;
 }
 
 /** Console errors and uncaught page errors, collected from now on. */
 export function watch(page: Page) {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+    // Not the page's own: a trace (RECORD=1) puts a script in every frame, and a sandboxed frame refuses it out loud.
+    page.on('console', (m) => m.type() === 'error' && !/Blocked script execution in .* sandboxed/.test(m.text()) && errors.push(m.text()));
     return errors;
 }
 

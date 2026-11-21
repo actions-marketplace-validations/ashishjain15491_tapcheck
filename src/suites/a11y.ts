@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { context, open, resolve, SessionExpired, slug, type Run } from '../browser.ts';
 
-const AXE = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
+export const AXE = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const TABS = 12;
 
 export async function run(r: Run) {

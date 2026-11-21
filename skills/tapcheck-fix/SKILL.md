@@ -18,7 +18,8 @@ to prove it by running the same check again.
 ## Hard rules
 
 1. **Never make a finding pass by weakening the check.** That means: no raising or removing a threshold; no adding
-   to `crawl.skip`, `security.allowedHosts` or `security.publicWrites`; no deleting a screen, task, gate, route or
+   to `crawl.skip`, `audit.skip`, `security.allowedHosts` or `security.publicWrites`; no adding a value to `design:` because a
+   page uses it; no lowering `interact.max` or `audit.max`; no deleting a screen, task, gate, route or
    flow step; no `warn: true` on a gate; no `CONTRACT_UPDATE=1`; no editing `done`/`notDone`/`optimal` until the
    task passes; no `SKIP` to hide a part; no linter ignore comments or loosened linter config; no editing tapcheck's
    own source. If one of these really is the right answer (a third-party host is intended, an API change was
@@ -41,7 +42,7 @@ Use the newest run (`ls -d .tapcheck/run-* | tail -1`, or the folder the user na
 isn't `.tapcheck`) and read its `findings.json`. If there is no run yet, or the code has changed since, run first
 (`tapcheck-run`). Take the entries with `status: "fail"`; group those with the same `check` and cause. List them for
 the user in the order you'll take them: parts that stopped early (`suite ran to the end`, `signed in`) first, then
-`code`, `crawl`, `contract`, `security`, `a11y`, flows, and Jev's last.
+`code`, `crawl`, `contract`, `security`, `a11y`, `interact`, `audit`, flows, and Jev's last.
 
 ### 2. Find the code
 
@@ -54,6 +55,8 @@ Open the evidence before the code: the screenshot, and the JSON that goes with t
 | `contract` | an API call answers 5xx/4xx, returns HTML or unparsable JSON to a script, is slow, or lost a top-level key | `<side>/network.json`; the baseline `contract-<side>.json` in `out` | the API handler, its serializer or resource; error handling that renders a page for an API request |
 | `security` | a header is missing, a cookie flag is off, a page opens signed out, CSRF isn't refused, a secret is served, a third-party host is called | the finding's `detail` lists pages; `<side>/network.json` | headers middleware or web-server config; session and cookie config; auth middleware on the route; the template or bundle that embeds the key or script |
 | `a11y` | an axe rule fails on a screen at a viewport, focus isn't visible, Tab is trapped, the page has no language | `<side>/axe.json` (rule, selector, HTML of each node) | the template or component that renders the node; CSS for contrast and focus styles; the layout for `lang` |
+| `interact` | clicking a control raised a page or console error, a 5xx or a native `alert`/`confirm`; a dialog has no accessible name, doesn't close with Escape, or takes invalid input without an error state. Warnings: a control that did nothing, focus left behind a dialog, a table control that changed nothing | `<side>/interact.json` (what was clicked, each dialog and table); the finding's `where` is the page and the dialog's name | the click handler named by the control's label; the dialog component (`aria-labelledby`, focus on open, an Escape handler, or a native `<dialog>` with `showModal()`); the form's validation (`required`, `aria-invalid`, a visible message) |
+| `audit` | on a screen at a size: text cut off, controls overlapping, a target under 24 px, a leaked placeholder (`undefined`, `{{name}}`), an image without `alt`, no focus ring, a menu or dialog off the screen, poor contrast or a white background in dark mode. Warnings: several looks for one kind of control, mixed label case, styles outside `design:` | `<side>/audit.json`; the screenshot in `<side>/shots/audit-*.png` | CSS at that width or colour scheme; the shared button and field styles (fix the odd one out, not every page); the template for placeholders and `alt`. Consistency and token warnings are product decisions (rule 4) |
 | `ux` (fail) | a measured fact (sideways scroll, tiny tap targets, more than one h1, a raw translation key) or a clear Jev verdict on the screenshot | `<side>/shots/` | CSS and layout at that viewport; the template; the translation file for a missing key |
 | `usability` (fail) | a first-time user didn't reach the task's screen, took a longer path, or hit dead clicks or errors | `<side>/clickstream.json` and the clickstream image | navigation and labels; a control that does nothing; usually a product decision (rule 4) |
 | `flow-<name>` | a step of the project's own flow threw | the step's screenshot; the flow file named by `flows:` | the app code the step exercises. Change the flow file only if it is plainly out of date with an intended change, and say so |
@@ -72,7 +75,8 @@ Make the smallest change that removes the cause. Then rerun only the part the fi
 
 ```bash
 ONLY=a11y-public TAPCHECK
-ONLY=security-admin TAPCHECK      # brings crawl-admin along
+ONLY=security-admin TAPCHECK      # brings crawl-admin along (so does interact-admin)
+JEV=off ONLY=audit-public TAPCHECK   # the measured audit, without Jev's look
 ONLY=code TAPCHECK                # no app, no browser
 ONLY=flow-checkout TAPCHECK
 JEV_BUDGET=0.25 ONLY=ux-public TAPCHECK

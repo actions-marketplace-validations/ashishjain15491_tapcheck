@@ -1,5 +1,5 @@
 /*
- * The Jev client the ux and usability suites share: one request function with a memo (the same images, state and
+ * The Jev client the ux, usability and audit suites share: one request function with a memo (the same images, state and
  * questions are answered once), a budget that stops the run before it overspends, a log of every payload so any answer
  * can be rerun, and the rules that turn Jev's probabilities and scores into verdicts. Decisions stay in code.
  */
@@ -34,6 +34,9 @@ export function apiKey(): string | undefined {
     const line = existsSync('.env') ? readFileSync('.env', 'utf8').split('\n').find((l) => l.startsWith('TYPESAFE_API_KEY=')) : undefined;
     return line?.slice('TYPESAFE_API_KEY='.length).trim().replace(/^["']|["']$/g, '') || undefined;
 }
+
+/** Why Jev isn't asked in this run ('JEV=off', no key), or '' when it is. */
+export const whyOff = () => (process.env.JEV === 'off' ? 'JEV=off' : client || apiKey() ? '' : 'no TYPESAFE_API_KEY');
 
 let opts: Config['jev'] = { budget: 1, headers: {} };
 let client: Client | null = null;

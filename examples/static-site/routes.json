@@ -1,5 +1,6 @@
 [
     { "method": "GET", "path": "/" },
     { "method": "GET", "path": "/contact.html" },
+    { "method": "GET", "path": "/plants.html" },
     { "method": "GET", "path": "/data/stats.json" }
 ]

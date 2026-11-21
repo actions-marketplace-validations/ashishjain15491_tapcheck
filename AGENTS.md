@@ -1,9 +1,9 @@
 # tapcheck
 
 tapcheck is an end-to-end and UI audit harness for any web app, whatever its language or stack. It drives the running
-app in a real browser, measures what code can measure (crawl, API contract, security headers, accessibility, the
-project's own gates and flows), and asks Jev to judge what needs a human eye (visual QA, design, usability). One file,
-`tapcheck.yml`, describes the app; one run writes one report.
+app in a real browser, measures what code can measure (crawl, API contract, security headers, accessibility,
+interaction, a UI audit, the project's own gates and flows), and asks Jev to judge what needs a human eye (visual QA,
+design, usability). One file, `tapcheck.yml`, describes the app; one run writes one report.
 
 This repository is also a plugin for Claude Code and Codex. The workflows are plain Markdown, so any agent can follow
 them without plugin support:

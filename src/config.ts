@@ -3,6 +3,7 @@
  * says what it should be, so a wrong config fails before any browser starts.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { isIPv4, isIPv6 } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { parse } from 'yaml';
 
@@ -15,21 +16,30 @@ export type Login =
 /** A usability task: start at `from`, try to reach the screen `done` describes in about `optimal` clicks; `text` is what a person would type on the way. */
 export type Task = { name: string; from: string; goal: string; done: string; notDone: string; optimal: number; text?: string };
 /** Every suite that runs once per side, in run order. */
-export const SUITES = ['crawl', 'contract', 'security', 'a11y', 'ux', 'usability'] as const;
+export const SUITES = ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'ux', 'usability'] as const;
 /** Every name `changes` can key on: the suites, plus the side-less `code` part and the custom flows. */
 const CHANGE_KEYS: string[] = [...SUITES, 'code', 'flow'];
 /** A command from the project's own toolchain: exit 0 passes; `warn` makes a non-zero exit a warning. `timeout` in seconds. */
 export type Gate = { name: string; run: string; timeout: number; warn: boolean };
 /** One canned answer of the stub server (src/stub.ts). `path` is a glob, or a regular expression when it starts with ^. */
 export type StubRule = { host?: string; method?: string; path?: string; status: number; json?: unknown; body?: string; file?: string; headers: Record<string, string>; delayMs: number };
+/** One answer of the stub's DNS server. An MX value is "<priority> <host>" or just the host (priority 10). */
+export const DNS_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'CNAME', 'NS'] as const;
+export type DnsRecord = { name: string; type: (typeof DNS_TYPES)[number]; values: string[] };
 export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[] };
 export type Config = {
     root: string; // the config file's folder: gates, the routes command, flows and stub files are relative to it
     baseUrl: string;
-    app: { start?: string; stop?: string; reset?: string; ready: string; timeout: number; allowRemoteReset: boolean };
+    // resetWhen: globs on paths from the git root; a matching file changed since the last reset runs `reset` before the run.
+    app: { start?: string; stop?: string; reset?: string; resetWhen: string[]; ready: string; timeout: number; allowRemoteReset: boolean };
     sides: Side[];
     loginPaths: RegExp; // a page whose path matches is a sign-in page: being sent there means "not signed in"
     crawl: { max: number; skip: RegExp };
+    // interact: `max` crawled screens are clicked through; `submit` also sends valid input in dialog forms, which changes data.
+    interact: { max: number; submit: boolean };
+    audit: { max: number; skip?: RegExp }; // max: crawled pages audited on top of the screens (0: screens only); skip: paths left out
+    // The design tokens the audit holds computed styles to; a list left out isn't checked. Colours are hex, radii and spacing px.
+    design?: { colors?: string[]; fonts?: string[]; radii?: number[]; spacing?: number[] };
     security: { csrf?: { method: string; path: string; expect: number }; allowedHosts: string[]; publicWrites?: RegExp }; // publicWrites: routes that write without sign-in on purpose
     viewports: { name: string; width: number; height: number; mobile: boolean }[];
     out: string;
@@ -41,7 +51,9 @@ export type Config = {
     changes: Record<string, string[]>;
     gates: Gate[];
     routes?: string; // a shell command printing the app's routes as JSON: [{method, path, auth?}]
-    stub?: { port: number; rules: StubRule[] };
+    stub?: { port: number; rules: StubRule[]; dns?: { port: number; records: DnsRecord[]; defaultA?: string } };
+    // COVERAGE=1: where the merged coverage map goes (from the config file's folder), and the gaps that are there on purpose.
+    coverage: { file: string; reasons: { match: RegExp; why: string }[] };
     flows: string[]; // globs of flow files (src/flow.ts)
     mail: { mailpit?: string }; // Mailpit's web address, for t.mail in flows
 };
@@ -143,8 +155,8 @@ function gates(v: unknown): Gate[] {
 
 function stub(v: any, root: string): Config['stub'] {
     if (v === undefined) return undefined;
-    if (!v || typeof v !== 'object' || Array.isArray(v)) fail('stub', 'must be {port?, rules?}');
-    const port = v.port ?? 8310;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) fail('stub', 'must be {port?, rules?, dns?}');
+    const port = v.port ?? 8766;
     if (!Number.isInteger(port) || port < 1 || port > 65535) fail('stub.port', 'must be a port number (1–65535)');
     if (v.rules !== undefined && !Array.isArray(v.rules)) fail('stub.rules', 'must be a list of {host?, method?, path?, status?, json? | body? | file?, headers?, delayMs?}');
     const rules = (v.rules ?? []).map((r: any, i: number): StubRule => {
@@ -162,7 +174,55 @@ function stub(v: any, root: string): Config['stub'] {
         return { host: str(r.host, `${at}.host`, true)?.toLowerCase(), method: str(r.method, `${at}.method`, true)?.toUpperCase(), path, status, json: r.json,
             body: r.body === undefined ? undefined : String(r.body), file, headers, delayMs };
     });
-    return { port, rules };
+    return { port, rules, dns: dns(v.dns) };
+}
+
+/** A record value as the stub can encode it: an address for A and AAAA, [priority] host for MX, any text otherwise. */
+export const dnsValue = (type: string, x: unknown) => typeof x === 'string' && !!x.trim()
+    && (type === 'A' ? isIPv4(x) : type === 'AAAA' ? isIPv6(x) && !x.includes('.') : type === 'MX' ? /^(\d+\s+)?\S+$/.test(x) : true);
+
+function dns(v: any): NonNullable<Config['stub']>['dns'] {
+    if (v === undefined) return undefined;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) fail('stub.dns', 'must be {port?, records?, defaultA?}');
+    const port = v.port ?? 8767;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) fail('stub.dns.port', 'must be a port number (1–65535)');
+    if (v.records !== undefined && !Array.isArray(v.records)) fail('stub.dns.records', 'must be a list of {name, type, values}');
+    const records = (v.records ?? []).map((r: any, i: number): DnsRecord => {
+        const at = `stub.dns.records[${i}]`;
+        if (!r || typeof r !== 'object') fail(at, 'must be {name, type, values}');
+        const type = String(r.type ?? '').toUpperCase() as DnsRecord['type'];
+        if (!DNS_TYPES.includes(type)) fail(`${at}.type`, `must be one of ${DNS_TYPES.join(', ')}`);
+        if (!Array.isArray(r.values) || !r.values.length) fail(`${at}.values`, 'must be a list with at least one value');
+        r.values.forEach((x: unknown, j: number) => dnsValue(type, x) || fail(`${at}.values[${j}]`,
+            type === 'A' ? 'must be an IPv4 address' : type === 'AAAA' ? 'must be an IPv6 address (hex groups only)' : type === 'MX' ? 'must be a mail host, or "<priority> <host>"' : 'must be a non-empty string'));
+        return { name: str(r.name, `${at}.name`)!.toLowerCase().replace(/\.$/, ''), type, values: r.values };
+    });
+    if (v.defaultA !== undefined && !dnsValue('A', v.defaultA)) fail('stub.dns.defaultA', 'must be an IPv4 address');
+    return { port, records, defaultA: v.defaultA };
+}
+
+function coverage(v: any): Config['coverage'] {
+    if (v !== undefined && (!v || typeof v !== 'object' || Array.isArray(v))) fail('coverage', 'must be {file?, reasons?}');
+    if (v?.reasons !== undefined && !Array.isArray(v.reasons)) fail('coverage.reasons', 'must be a list of {match, why}');
+    return { file: str(v?.file ?? 'COVERAGE.md', 'coverage.file')!, reasons: (v?.reasons ?? []).map((r: any, i: number) => {
+        if (!r || typeof r !== 'object') fail(`coverage.reasons[${i}]`, 'must be {match, why}');
+        return { match: regex(r.match, `coverage.reasons[${i}].match`, ''), why: str(r.why, `coverage.reasons[${i}].why`)! };
+    }) };
+}
+
+function design(v: any): Config['design'] {
+    if (v === undefined) return undefined;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) fail('design', 'must be {colors?, fonts?, radii?, spacing?}');
+    const list = <T>(key: string, ok: (x: unknown) => boolean, want: string): T[] | undefined => {
+        if (v[key] === undefined) return undefined;
+        if (!Array.isArray(v[key])) fail(`design.${key}`, 'must be a list');
+        v[key].forEach((x: unknown, i: number) => ok(x) || fail(`design.${key}[${i}]`, want));
+        return v[key];
+    };
+    const px = (x: unknown) => typeof x === 'number' && x >= 0;
+    return { colors: list('colors', (x) => typeof x === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(x), 'must be a hex colour in quotes, such as "#1f2937"'),
+        fonts: list('fonts', (x) => typeof x === 'string' && !!x.trim(), 'must be a font family name'),
+        radii: list('radii', px, 'must be a number of pixels, 0 or more'), spacing: list('spacing', px, 'must be a number of pixels, 0 or more') };
 }
 
 /** Checks a parsed (and expanded) config object and fills in the defaults. `root` is the config file's folder. */
@@ -172,7 +232,11 @@ export function check(raw: any, root = process.cwd()): Config {
     const a = raw.app ?? {};
     const timeout = a.timeout ?? 120;
     if (typeof timeout !== 'number' || timeout <= 0) fail('app.timeout', 'must be a positive number of seconds');
-    const app = { start: str(a.start, 'app.start', true), stop: str(a.stop, 'app.stop', true), reset: str(a.reset, 'app.reset', true),
+    const resetWhen = a.resetWhen ?? [];
+    if (!Array.isArray(resetWhen)) fail('app.resetWhen', 'must be a list of globs, e.g. ["database/**"]');
+    resetWhen.forEach((g: unknown, i: number) => str(g, `app.resetWhen[${i}]`));
+    if (resetWhen.length && !a.reset) fail('app.resetWhen', 'needs app.reset: the command it runs');
+    const app = { start: str(a.start, 'app.start', true), stop: str(a.stop, 'app.stop', true), reset: str(a.reset, 'app.reset', true), resetWhen,
         ready: str(a.ready ?? '/', 'app.ready')!, timeout, allowRemoteReset: a.allowRemoteReset === true };
 
     // screens and tasks: a list (every side) or a map of side → list.
@@ -196,6 +260,14 @@ export function check(raw: any, root = process.cwd()): Config {
     const c = raw.crawl ?? {};
     const max = c.max ?? 60;
     if (!Number.isInteger(max) || max < 1) fail('crawl.max', 'must be a whole number above 0');
+    const it = raw.interact ?? {}, au = raw.audit ?? {};
+    if (typeof it !== 'object' || Array.isArray(it)) fail('interact', 'must be {max?, submit?}');
+    const interactMax = it.max ?? 40;
+    if (!Number.isInteger(interactMax) || interactMax < 1) fail('interact.max', 'must be a whole number above 0');
+    if (it.submit !== undefined && typeof it.submit !== 'boolean') fail('interact.submit', 'must be true or false');
+    if (typeof au !== 'object' || Array.isArray(au)) fail('audit', 'must be {max?, skip?}');
+    const auditMax = au.max ?? 0;
+    if (!Number.isInteger(auditMax) || auditMax < 0) fail('audit.max', 'must be a whole number, 0 or more');
     const s = raw.security ?? {};
     let csrf;
     if (s.csrf !== undefined) {
@@ -234,10 +306,11 @@ export function check(raw: any, root = process.cwd()): Config {
     flows.forEach((g: unknown, i: number) => str(g, Array.isArray(raw.flows) ? `flows[${i}]` : 'flows'));
     if (raw.mail !== undefined && (!raw.mail || typeof raw.mail !== 'object')) fail('mail', 'must be {mailpit: <the address of Mailpit\'s web page>}');
 
-    return { root, baseUrl, app, sides, changes, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), flows,
+    return { root, baseUrl, app, sides, changes, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows,
         mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
-        crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, security: { csrf, allowedHosts, publicWrites: s.publicWrites === undefined ? undefined : regex(s.publicWrites, 'security.publicWrites', '') }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };
+        crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, interact: { max: interactMax, submit: it.submit === true },
+        audit: { max: auditMax, skip: au.skip === undefined ? undefined : regex(au.skip, 'audit.skip', '') }, design: design(raw.design), security: { csrf, allowedHosts, publicWrites: s.publicWrites === undefined ? undefined : regex(s.publicWrites, 'security.publicWrites', '') }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };
 }
 
 export function load(file = 'tapcheck.yml'): Config {
@@ -245,7 +318,8 @@ export function load(file = 'tapcheck.yml'): Config {
     let raw;
     try { raw = parse(readFileSync(file, 'utf8')); } catch (e) { throw new Error(`${file} is not valid YAML: ${(e as Error).message}`); }
     // The stub's address is known before anything starts, so tapcheck.yml itself can use $TAPCHECK_STUB_URL (in app.start, say).
-    if (raw?.stub) process.env.TAPCHECK_STUB_URL = `http://127.0.0.1:${raw.stub.port ?? 8310}`;
+    if (raw?.stub) process.env.TAPCHECK_STUB_URL = `http://127.0.0.1:${raw.stub.port ?? 8766}`;
+    if (raw?.stub?.dns) process.env.TAPCHECK_DNS = `127.0.0.1:${raw.stub.dns.port ?? 8767}`; // the stub's DNS server, as host:port
     return check(expand(raw), dirname(resolve(file)));
 }
 

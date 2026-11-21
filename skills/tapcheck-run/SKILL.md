@@ -30,6 +30,8 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 | nothing specific, or "check my changes" (default) | `CHANGED=1 TAPCHECK` |
 | everything, a full audit, a release check | `TAPCHECK` |
 | one area: "accessibility", "security", "the admin side" | `ONLY=a11y TAPCHECK`, `ONLY=security TAPCHECK`, `ONLY=admin TAPCHECK` |
+| "do the buttons, dialogs and tables work", "click through everything" | `ONLY=interact TAPCHECK` (brings its side's crawl) |
+| "audit the UI", design consistency, dark mode, tablet and phone layout, design tokens | `ONLY=audit TAPCHECK` (`JEV=off` leaves out Jev's look) |
 | several | `ONLY=crawl,a11y TAPCHECK` (part names or tags, comma-separated; `ONLY='flow-*'` matches a name prefix) |
 | everything but something | `SKIP=usability TAPCHECK`; both together: `ONLY=customer SKIP=jev TAPCHECK` |
 | no AI judgment, free, fast | `JEV=off TAPCHECK` (or `ONLY=measured`) |
@@ -39,7 +41,12 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 - `CHANGED=1` runs, of the chosen parts, those whose files changed since each last passed, and any that never
   passed. It needs a git repository. "Nothing to run" means nothing relevant changed: say so, and offer a full run.
   It combines with `ONLY` and `SKIP`.
-- `contract` and `security` read the crawl, so choosing them brings their side's `crawl` along.
+- `contract`, `security` and `interact` read the crawl, so choosing them brings their side's `crawl` along.
+- `interact` clicks every control that isn't labelled as destructive and isn't a POST form's submit button. Run it
+  against test data. If `tapcheck.yml` has `interact.submit: true` it also submits dialog forms and changes data:
+  say so before the run, as for flows.
+- `audit` checks only the configured screens unless `audit.max` is set; then it needs the crawl in the same run
+  (`ONLY=crawl,audit`).
 - Flows may submit forms and change data. If `tapcheck.yml` has `flows:` and the user didn't ask for them, say that
   they are included; `SKIP=flow` leaves them out, `RESET=1` runs `app.reset` first to start from clean data. Use
   `RESET=1` only when the user asks or has agreed: it wipes the test database.
@@ -47,13 +54,22 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
   start. `LOGIN=1` makes it ask again when the saved session has expired.
 - `CONTRACT_UPDATE=1` accepts the current JSON response shapes as the new baseline. Only when the user confirms the
   API change was intended.
+- If `tapcheck.yml` has `app.resetWhen`, `app.reset` runs by itself when one of those files changed since the last
+  reset (the output says `Resetting (<why>)`). It wipes the test database like `RESET=1`: say so before the run when a
+  matching file has changed.
+- `HEADED=1` shows the browser, for a user who wants to watch; add `SLOWMO=150` (milliseconds per action) to make it
+  followable and `START_DELAY=10` for a countdown before the first action. The run still ends by itself. Leave them
+  off otherwise: headless is faster.
+- `RECORD=1` keeps a video and a Playwright trace of every browser context. Use it when a failure can't be understood
+  from its screenshot, on the failing parts only (`RECORD=1 ONLY=flow-checkout`): it makes runs slower and the run
+  folder larger.
 - `TAPCHECK_CONFIG=path` uses another config file.
 
 ### Jev and its cost
 
-`ux` and `usability` ask Jev (a paid API) and need `TYPESAFE_API_KEY` in the environment or in `.env` next to
-`tapcheck.yml`. Never ask for the key in chat and never read `.env`; without a key those parts are skipped and the
-rest runs. A run stops asking Jev once it has spent its budget: `jev.budget` in `tapcheck.yml`, default 1 USD.
+`ux` and `usability` ask Jev (a paid API), as does `audit` for its look at each screen, menu and dialog; they need `TYPESAFE_API_KEY` in the environment or in `.env` next to
+`tapcheck.yml`. Never ask for the key in chat and never read `.env`; without a key those parts (and `audit`'s
+looks) are skipped and the rest runs. A run stops asking Jev once it has spent its budget: `jev.budget` in `tapcheck.yml`, default 1 USD.
 `JEV_BUDGET=0.25 TAPCHECK` sets it for one run. When the budget is reached the remaining Jev parts are skipped and
 marked so; mention it and the `JEV_BUDGET` that would let them finish.
 
@@ -81,8 +97,22 @@ The run folder is the one on the `Report:` line (the newest `run-*` under `out`,
 
 `status` is `fail`, `warn`, `info` or `pass`. `evidence` paths are relative to the folder you ran in; look at a
 screenshot before describing what it shows. More detail per side is in the run folder: `crawl.json` (pages and link
-statuses), `network.json` (every request), `axe.json`, `clickstream.json`, `missed-routes.json`, and `code.json` (the
-gates' output) at the top.
+statuses), `network.json` (every request), `axe.json`, `interact.json` (the controls, dialogs and tables exercised),
+`audit.json` (every audit problem, the looks of each kind of control, styles outside the tokens), `clickstream.json`,
+`missed-routes.json`, `hits.json` (what each part reached), and `code.json` (the gates' output) at the top.
+
+After a `RECORD=1` run, `report.html` and `REPORT.md` end with a Recordings list: per side and part, the videos
+(`<side>/videos/*.webm`) and the trace with its command, `npx playwright show-trace <file>`. Give the user that
+command for the failing part; the trace viewer opens a window, so don't run it yourself unless asked.
+
+### Coverage across runs
+
+`COVERAGE=1 TAPCHECK` runs nothing. It merges the `hits.json` of every run folder under `out` into `COVERAGE.md` next
+to `tapcheck.yml` (or `coverage.file`) and prints the count and each `GAP`. With `routes:` configured, every route is
+listed with the part or flow step that reached it, or **GAP**; dialogs and table controls `interact` exercised follow.
+Use it when the user asks what the checks cover or what is untested. A GAP is a route no part reached: propose a
+screen, a flow step, or a `coverage.reasons` entry (`{match, why}`) when it is left out on purpose; don't add a reason
+without the user's agreement.
 
 ## 4. Report
 
@@ -92,7 +122,9 @@ Keep it short and in this order:
 2. **Failures**, grouped by suite: where, what was checked, the detail, and the evidence path. Merge repeats (the
    same header missing on every page is one line). A `suite ran to the end` or `signed in` failure means a part
    stopped early: put it first, since its other checks never ran.
-3. **Warnings**, briefly. A warning from `ux` or `usability` is Jev being unsure: it is for a person to look at with
+3. **Warnings**, briefly. A warning from `interact` (a control that did nothing) or `audit` (several looks for one
+   kind of control, mixed label case, a style outside the design tokens) is measured, and usually a design decision.
+   A warning from `ux` or `usability` is Jev being unsure: it is for a person to look at with
    the screenshot, not a defect and not a pass. Say that.
 4. Parts skipped or not run, and why (no key, `JEV=off`, budget reached, sign-in failed).
 5. The Jev spend line the run printed (`Jev: … calls, … $0.12 of the $1 budget`), if Jev ran.

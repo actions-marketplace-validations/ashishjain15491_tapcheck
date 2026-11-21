@@ -34,6 +34,29 @@ export const VISUAL = {
     }),
 };
 
+// ───────────────────────────── EMAIL (t.mail.judge in flows) ─────────────────────────────
+// `screenshot` is the email as a mail program on a computer shows it, `screenshot_mobile` the same email at a phone's width.
+export const EMAIL = {
+    rendered: noul('Does `screenshot` show a properly laid-out email?', {
+        true: 'The email shows formatted text, and any images, buttons or columns sit where a designer would put them.',
+        false: 'The email shows raw HTML or code, broken image boxes, or a jumbled layout.',
+    }),
+    unfilled_placeholder: noul('Does `screenshot` show a placeholder that was not replaced with real data?', {
+        true: 'Text such as {{first_name}}, {first_name}, [FNAME] or %name% appears in the email.',
+        false: 'Every name, date and link reads as real content.',
+    }),
+    actions_visible: noul('In `screenshot`, is every link and button easy to see and tell apart from plain text?', {
+        true: 'Each link is underlined or coloured, and each button looks like a button with a readable label. An email with no links or buttons at all also counts.',
+        false: 'A link looks like plain text, a button has no visible label, or a link or button is too faint to notice.',
+    }),
+    mobile_readable: noul('Can the email in `screenshot_mobile` be read on a phone without zooming or scrolling sideways?', {
+        true: 'The text fits the width of the screen and is large enough to read.',
+        false: 'Text or images are cut off at the side, the layout is wider than the screen, or the text is too small to read.',
+    }),
+};
+/** The yes-or-no questions above where yes is a defect. For every other one, yes is the good answer. */
+export const YES_IS_DEFECT = ['error_shown', 'overlap', 'clipped', 'raw_key', 'misaligned', 'unfilled_placeholder'];
+
 // ───────────────────────────── VISUAL DESIGN (CTA, negative space, hierarchy, legibility) ─────────────────────────────
 export const DESIGN = {
     cta: score('How clear is the main action a person can take in `screenshots`?', [
