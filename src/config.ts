@@ -3,6 +3,7 @@
  * says what it should be, so a wrong config fails before any browser starts.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { parse } from 'yaml';
 
 export type Screen = { name: string; path?: string; from?: string; link?: string; suffix?: string; purpose?: string };
@@ -13,16 +14,23 @@ export type Login =
     | { command: string }; // prints a Playwright storageState JSON on stdout
 /** A usability task: start at `from`, try to reach the screen `done` describes in about `optimal` clicks; `text` is what a person would type on the way. */
 export type Task = { name: string; from: string; goal: string; done: string; notDone: string; optimal: number; text?: string };
-/** Every suite, in run order. */
+/** Every suite that runs once per side, in run order. */
 export const SUITES = ['crawl', 'contract', 'security', 'a11y', 'ux', 'usability'] as const;
+/** Every name `changes` can key on: the suites, plus the side-less `code` part and the custom flows. */
+const CHANGE_KEYS: string[] = [...SUITES, 'code', 'flow'];
+/** A command from the project's own toolchain: exit 0 passes; `warn` makes a non-zero exit a warning. `timeout` in seconds. */
+export type Gate = { name: string; run: string; timeout: number; warn: boolean };
+/** One canned answer of the stub server (src/stub.ts). `path` is a glob, or a regular expression when it starts with ^. */
+export type StubRule = { host?: string; method?: string; path?: string; status: number; json?: unknown; body?: string; file?: string; headers: Record<string, string>; delayMs: number };
 export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[] };
 export type Config = {
+    root: string; // the config file's folder: gates, the routes command, flows and stub files are relative to it
     baseUrl: string;
     app: { start?: string; stop?: string; reset?: string; ready: string; timeout: number; allowRemoteReset: boolean };
     sides: Side[];
     loginPaths: RegExp; // a page whose path matches is a sign-in page: being sent there means "not signed in"
     crawl: { max: number; skip: RegExp };
-    security: { csrf?: { method: string; path: string; expect: number }; allowedHosts: string[] };
+    security: { csrf?: { method: string; path: string; expect: number }; allowedHosts: string[]; publicWrites?: RegExp }; // publicWrites: routes that write without sign-in on purpose
     viewports: { name: string; width: number; height: number; mobile: boolean }[];
     out: string;
     audience: string; // who the app is for, in the words Jev is asked with ("a shop owner", "a nurse on a ward")
@@ -31,6 +39,11 @@ export type Config = {
     // CHANGED=1: which files each suite depends on, as globs on paths from the git root ("*" is every suite). A suite
     // with no globs reruns on any change. Globs are Node's path.matchesGlob: * and ** don't match names starting with a dot.
     changes: Record<string, string[]>;
+    gates: Gate[];
+    routes?: string; // a shell command printing the app's routes as JSON: [{method, path, auth?}]
+    stub?: { port: number; rules: StubRule[] };
+    flows: string[]; // globs of flow files (src/flow.ts)
+    mail: { mailpit?: string }; // Mailpit's web address, for t.mail in flows
 };
 
 const DEFAULT_SKIP = '/(logout|log-out|sign-?out|delete|destroy|remove|export|download|impersonat|unsubscribe)|\\.(csv|pdf|zip|png|jpe?g|gif|svg|webp|ico|xlsx?)$';
@@ -116,8 +129,44 @@ function tasks(v: unknown, field: string): Task[] {
     });
 }
 
-/** Checks a parsed (and expanded) config object and fills in the defaults. */
-export function check(raw: any): Config {
+function gates(v: unknown): Gate[] {
+    if (v === undefined) return [];
+    if (!Array.isArray(v)) fail('gates', 'must be a list of {name, run, timeout?, warn?}');
+    return v.map((g, i) => {
+        const at = `gates[${i}]`;
+        if (!g || typeof g !== 'object') fail(at, 'must be {name, run, timeout?, warn?}');
+        const timeout = g.timeout ?? 600;
+        if (typeof timeout !== 'number' || timeout <= 0) fail(`${at}.timeout`, 'must be a positive number of seconds');
+        return { name: str(g.name, `${at}.name`)!, run: str(g.run, `${at}.run`)!, timeout, warn: g.warn === true };
+    });
+}
+
+function stub(v: any, root: string): Config['stub'] {
+    if (v === undefined) return undefined;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) fail('stub', 'must be {port?, rules?}');
+    const port = v.port ?? 8310;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) fail('stub.port', 'must be a port number (1–65535)');
+    if (v.rules !== undefined && !Array.isArray(v.rules)) fail('stub.rules', 'must be a list of {host?, method?, path?, status?, json? | body? | file?, headers?, delayMs?}');
+    const rules = (v.rules ?? []).map((r: any, i: number): StubRule => {
+        const at = `stub.rules[${i}]`;
+        if (!r || typeof r !== 'object') fail(at, 'must be {host?, method?, path?, status?, json? | body? | file?, headers?, delayMs?}');
+        const status = r.status ?? 200, delayMs = r.delayMs ?? 0, headers = r.headers ?? {};
+        if (!Number.isInteger(status) || status < 100 || status > 599) fail(`${at}.status`, 'must be an HTTP status (100–599)');
+        if (typeof delayMs !== 'number' || delayMs < 0) fail(`${at}.delayMs`, 'must be a number of milliseconds, 0 or more');
+        if (typeof headers !== 'object' || Array.isArray(headers)) fail(`${at}.headers`, 'must map header names to values');
+        if (['json', 'body', 'file'].filter((k) => r[k] !== undefined).length > 1) fail(at, 'takes one of json, body or file');
+        const path = str(r.path, `${at}.path`, true);
+        if (path?.startsWith('^')) regex(path, `${at}.path`, '');
+        const file = str(r.file, `${at}.file`, true);
+        if (file && !existsSync(resolve(root, file))) fail(`${at}.file`, `is not a file next to tapcheck.yml: ${file}`);
+        return { host: str(r.host, `${at}.host`, true)?.toLowerCase(), method: str(r.method, `${at}.method`, true)?.toUpperCase(), path, status, json: r.json,
+            body: r.body === undefined ? undefined : String(r.body), file, headers, delayMs };
+    });
+    return { port, rules };
+}
+
+/** Checks a parsed (and expanded) config object and fills in the defaults. `root` is the config file's folder. */
+export function check(raw: any, root = process.cwd()): Config {
     if (!raw || typeof raw !== 'object') fail('', 'must be a YAML mapping');
     const baseUrl = url(raw.baseUrl, 'baseUrl');
     const a = raw.app ?? {};
@@ -134,7 +183,7 @@ export function check(raw: any): Config {
     const sides = Object.entries(sideDefs).map(([name, s]): Side => {
         if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`sides.${name}`, 'name must be lowercase letters, digits and dashes');
         // Side names are tags too (ONLY=<side>), so they can't reuse a suite or kind tag.
-        if ([...SUITES, 'jev', 'measured'].includes(name)) fail(`sides.${name}`, `name can't be a suite or tag name (${[...SUITES, 'jev', 'measured'].join(', ')})`);
+        if ([...CHANGE_KEYS, 'jev', 'measured'].includes(name)) fail(`sides.${name}`, `name can't be a suite or tag name (${[...CHANGE_KEYS, 'jev', 'measured'].join(', ')})`);
         return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`),
             screens: screens(byside('screens', name), at('screens', name)), tasks: tasks(byside('tasks', name), at('tasks', name)) };
     });
@@ -176,21 +225,28 @@ export function check(raw: any): Config {
     const changes = raw.changes ?? {};
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) fail('changes', 'must map a suite name (or "*") to a list of globs');
     for (const [k, globs] of Object.entries(changes)) {
-        if (k !== '*' && !(SUITES as readonly string[]).includes(k)) fail(`changes.${k}`, `names a suite that doesn't exist (use "*" or one of ${SUITES.join(', ')})`);
+        if (k !== '*' && !CHANGE_KEYS.includes(k)) fail(`changes.${k}`, `names a suite that doesn't exist (use "*" or one of ${CHANGE_KEYS.join(', ')})`);
         if (!Array.isArray(globs) || !globs.length) fail(`changes.${k}`, 'must be a list of globs, e.g. ["src/**"]');
         globs.forEach((g, i) => str(g, `changes.${k}[${i}]`));
     }
 
-    return { baseUrl, app, sides, changes, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
+    const flows = raw.flows === undefined ? [] : Array.isArray(raw.flows) ? raw.flows : [raw.flows];
+    flows.forEach((g: unknown, i: number) => str(g, Array.isArray(raw.flows) ? `flows[${i}]` : 'flows'));
+    if (raw.mail !== undefined && (!raw.mail || typeof raw.mail !== 'object')) fail('mail', 'must be {mailpit: <the address of Mailpit\'s web page>}');
+
+    return { root, baseUrl, app, sides, changes, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), flows,
+        mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
-        crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, security: { csrf, allowedHosts }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };
+        crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, security: { csrf, allowedHosts, publicWrites: s.publicWrites === undefined ? undefined : regex(s.publicWrites, 'security.publicWrites', '') }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };
 }
 
 export function load(file = 'tapcheck.yml'): Config {
     if (!existsSync(file)) throw new Error(`No ${file} here. Write one (see examples/) or let the tapcheck-setup skill write it.`);
     let raw;
     try { raw = parse(readFileSync(file, 'utf8')); } catch (e) { throw new Error(`${file} is not valid YAML: ${(e as Error).message}`); }
-    return check(expand(raw));
+    // The stub's address is known before anything starts, so tapcheck.yml itself can use $TAPCHECK_STUB_URL (in app.start, say).
+    if (raw?.stub) process.env.TAPCHECK_STUB_URL = `http://127.0.0.1:${raw.stub.port ?? 8310}`;
+    return check(expand(raw), dirname(resolve(file)));
 }
 
 /** Hosts a reset may run against without allowRemoteReset: this machine, *.localhost and *.test. */

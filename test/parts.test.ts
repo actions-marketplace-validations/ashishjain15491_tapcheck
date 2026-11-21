@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 import { build, changedParts, mark, select, snapshot, withNeeds, type State } from '../src/parts.ts';
 
@@ -33,6 +33,57 @@ test('needs: contract and security bring the crawl on their own side', () => {
     assert.deepEqual(names('security-staff'), ['crawl-staff', 'security-staff']);
     assert.deepEqual(names('contract'), ['crawl-customer', 'contract-customer', 'crawl-staff', 'contract-staff']);
     assert.deepEqual(names('ux-customer'), ['ux-customer']);
+});
+
+test('code and flows: code has no side and comes first, each flow is a part on its side', () => {
+    const parts = build(['customer', 'staff'], { code: true, flows: [{ part: 'flow-invite', side: 'staff' }, { part: 'flow-check-out', side: 'customer' }, { part: 'flow-sign-up', side: 'customer' }] });
+    const pick = (only: string, skip = '') => withNeeds(parts, select(parts, only ? only.split(',') : [], skip ? skip.split(',') : [])).map((p) => p.name);
+    assert.deepEqual(parts[0], { name: 'code', suite: 'code', side: '', tags: ['code', 'measured'], needs: [] });
+    assert.deepEqual(parts.slice(6, 9).map((p) => p.name), ['usability-customer', 'flow-check-out', 'flow-sign-up']);
+    assert.deepEqual(parts.at(-1), { name: 'flow-invite', suite: 'flow', side: 'staff', tags: ['flow', 'staff', 'measured'], needs: [] });
+    assert.deepEqual(pick('code'), ['code']);
+    assert.deepEqual(pick('flow'), ['flow-check-out', 'flow-sign-up', 'flow-invite']);
+    assert.deepEqual(pick('customer', 'jev,crawl,contract,security,a11y'), ['flow-check-out', 'flow-sign-up']); // a side's tag never brings code
+    assert.deepEqual(pick('measured', 'customer,staff'), ['code']);
+    assert.ok(!build(['customer']).some((p) => p.name === 'code'), 'no gates and no routes: no code part');
+
+    // One flow failing doesn't fail the other flow on its side, and a side's failures aren't code's.
+    const state: State = { parts: {} };
+    const ran = parts.filter((p) => ['code', 'flow-check-out', 'flow-sign-up'].includes(p.name));
+    assert.deepEqual(mark(state, ran, [{ suite: 'flow-sign-up', side: 'customer', status: 'fail' }, { suite: 'crawl', side: 'customer', status: 'fail' }], { snapshot: 'abc', untracked: [] }),
+        { code: true, 'flow-check-out': true, 'flow-sign-up': false });
+    assert.deepEqual(mark(state, ran, [{ suite: 'code', side: '', status: 'fail' }], null), { code: false, 'flow-check-out': true, 'flow-sign-up': true });
+});
+
+// ───────────────────────────── the CLI itself, on a config whose app can't start ─────────────────────────────
+test('cli: LIST shows the code and flow parts; a code-only run starts no app and no stub is left behind', () => {
+    const cwd = mkdtempSync(`${tmpdir()}/tapcheck-cli-`);
+    writeFileSync(`${cwd}/flow.ts`, "import type { Flow } from 'tapcheck';\nexport default { name: 'Sign up!', run: async () => {} } satisfies Flow;\n");
+    writeFileSync(`${cwd}/tapcheck.yml`, [
+        'baseUrl: http://127.0.0.1:9', // nothing answers on the discard port
+        'app: { start: "touch started.txt; sleep 30", timeout: 2 }',
+        'gates:',
+        '  - { name: sees the stub, run: \'test "$TAPCHECK_STUB_URL" = "http://127.0.0.1:18766"\' }',
+        '  - { name: lint, run: "echo two problems; exit 1" }',
+        'stub: { port: 18766 }',
+        'flows: "*.ts"',
+    ].join('\n'));
+    const cli = (env: Record<string, string>) => spawnSync(process.execPath, [resolve('src/cli.ts')], { cwd, encoding: 'utf8', env: { ...process.env, JEV: 'off', ...env } });
+
+    const listed = cli({ LIST: '1', ONLY: 'code,flow' });
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.deepEqual(listed.stdout.trim().split('\n').map((l) => l.replace(/\s+/g, ' ')),
+        ['▶ code code, measured', ' crawl-public crawl, public, measured', ' contract-public contract, public, measured', ' security-public security, public, measured',
+            ' a11y-public a11y, public, measured', ' ux-public ux, public, jev', ' usability-public usability, public, jev', '▶ flow-sign-up flow, public, measured']);
+
+    const run = cli({ ONLY: 'code' });
+    assert.match(run.stdout, /Running: code\n/);
+    assert.match(run.stdout, /✗ code\n/);
+    assert.equal(run.status, 1, 'the failing gate fails the run');
+    assert.ok(!existsSync(`${cwd}/started.txt`), 'app.start never ran');
+    const out = execFileSync('sh', ['-c', 'cat .tapcheck/run-*/findings.json'], { cwd, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(out).map((f: any) => [f.suite, f.side, f.check, f.status, f.detail]),
+        [['code', '', 'sees the stub', 'pass', undefined], ['code', '', 'lint', 'fail', 'exit 1: two problems']]);
 });
 
 test('mark: a part with a failing finding of its own is not recorded, a clean one is', () => {

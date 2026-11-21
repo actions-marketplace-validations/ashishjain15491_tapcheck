@@ -3,7 +3,12 @@
  * tapcheck: start (or find) the app, sign in each side, run the suites, write one report.
  *
  * Every suite on every side is a part, named <suite>-<side> (crawl-public, ux-customer), tagged with its suite, its
- * side, and jev (ux, usability) or measured (crawl, contract, security, a11y).
+ * side, and jev (ux, usability) or measured (crawl, contract, security, a11y). Two more kinds of part:
+ *   code          the project's own gates (`gates:`) and the route sign-in check (`routes:`); tags code, measured. It has
+ *                 no side: a run of only `code` starts no app and no browser.
+ *   flow-<name>   each custom flow (`flows:`, see src/flow.ts) on its side; tags flow, its side, measured.
+ * With `stub:` in tapcheck.yml, a stub server (src/stub.ts) stands in for the outside services the app calls; it starts
+ * before the app, and its address is TAPCHECK_STUB_URL for app.start, the gates and tapcheck.yml itself.
  *
  *   tapcheck                        every part, with ./tapcheck.yml
  *   ONLY=crawl,a11y tapcheck        only these parts: part names or tags, comma-separated; a trailing * matches name prefixes
@@ -20,17 +25,21 @@
  * ux and usability ask Jev (TypeSafe): put TYPESAFE_API_KEY in the environment, or in a .env file next to tapcheck.yml.
  *
  * Output: <out>/run-<time>/report.html (open it), REPORT.md, findings.json, payloads.json (every Jev request) and per
- * side the raw evidence. <out>/state.json remembers the code each part last passed at. Exit code 1 when any check fails. tapcheck only reads: it never submits a form or follows a
- * delete, send or sign-out.
+ * side the raw evidence. <out>/state.json remembers the code each part last passed at. Exit code 1 when any check fails.
+ * The suites only read: they never submit a form or follow a delete, send or sign-out. Flows are the exception: they are
+ * your own code, may click and submit anything, and so may change data (leave them out with SKIP=flow).
  */
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isLocal, load, SUITES, type Config } from './config.ts';
-import { build, changedParts, list, mark, select, snapshot, withNeeds, type State } from './parts.ts';
+import { build, changedParts, findingSuite, list, mark, select, snapshot, withNeeds, type Part, type State } from './parts.ts';
 import { signIn } from './auth.ts';
 import { closeBrowser, SessionExpired, type Run } from './browser.ts';
 import * as jev from './jev.ts';
+import { loadFlows, runFlow } from './flow.ts';
 import { findings, record, write } from './report.ts';
+import { start as startStub } from './stub.ts';
+import * as code from './suites/code.ts';
 import * as crawl from './suites/crawl.ts';
 import * as contract from './suites/contract.ts';
 import * as security from './suites/security.ts';
@@ -67,7 +76,8 @@ function stopApp(cfg: Config, child: ChildProcess | null) {
 
 const configFile = process.env.TAPCHECK_CONFIG ?? 'tapcheck.yml';
 const cfg = load(configFile);
-const PARTS = build(cfg.sides.map((s) => s.name));
+const flows = await loadFlows(cfg);
+const PARTS = build(cfg.sides.map((s) => s.name), { code: cfg.gates.length > 0 || !!cfg.routes, flows });
 const statePath = `${cfg.out}/state.json`;
 const state: State = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { parts: {} };
 let chosen = select(PARTS, list(process.env.ONLY), list(process.env.SKIP));
@@ -98,11 +108,30 @@ const ran: typeof chosen = []; // parts that ran, to the end or not
 const skipped: Record<string, string> = {}; // Jev parts left out, and why: neither passed nor failed
 const notRun: Record<string, string> = {}; // parts that couldn't run, and why: they count as failed
 
+const label = (p: Part) => (p.suite === 'flow' ? p.name : p.suite);
+/** Runs one part; what it throws becomes a failing finding of its own and is returned. */
+async function runPart(p: Part, rec: Run['record'], fn: () => Promise<void>): Promise<unknown> {
+    const t0 = Date.now();
+    process.stdout.write(`  ${label(p)}… `);
+    ran.push(p);
+    try {
+        await fn();
+        console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+    } catch (e) {
+        const msg = (e as Error).message;
+        console.log(`stopped: ${msg}`);
+        rec({ suite: findingSuite(p), where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
+        return e;
+    }
+}
+
 const started = Date.now();
 const dir = `${cfg.out}/run-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
 mkdirSync(dir, { recursive: true });
-const app = await startApp(cfg);
-const onSignal = () => { stopApp(cfg, app); process.exit(130); };
+const stub = cfg.stub ? await startStub(cfg.stub, cfg.out, cfg.root) : null; // before the app, which is started with its address
+const needsApp = chosen.some((p) => p.side); // the code part alone needs neither the app nor a browser
+const app = needsApp ? await startApp(cfg).catch(async (e) => { await stub?.stop(); throw e; }) : null;
+const onSignal = () => { if (needsApp) stopApp(cfg, app); process.exit(130); };
 process.once('SIGINT', onSignal);
 process.once('SIGTERM', onSignal);
 
@@ -115,12 +144,18 @@ try {
         console.log(`Resetting: ${cfg.app.reset}`);
         execSync(cfg.app.reset, { stdio: 'inherit', shell: '/bin/sh' });
     }
+    const codePart = chosen.find((p) => p.suite === 'code');
+    if (codePart) {
+        const rec: Run['record'] = (f) => record({ ...f, side: '' });
+        console.log(`\ncode: ${cfg.gates.length} gate(s)${cfg.routes ? ', routes' : ''}`);
+        await runPart(codePart, rec, () => code.run(cfg, dir, rec));
+    }
     for (const side of cfg.sides) {
         const parts = chosen.filter((p) => p.side === side.name);
         if (!parts.length) continue;
         const sideDir = `${dir}/${side.name}`;
         mkdirSync(sideDir, { recursive: true });
-        console.log(`\n${side.name} at ${side.baseUrl}: ${parts.map((p) => p.suite).join(', ')}`);
+        console.log(`\n${side.name} at ${side.baseUrl}: ${parts.map(label).join(', ')}`);
         const r: Run = { cfg, side, dir: sideDir, record: (f) => record({ ...f, side: side.name }), crawl: { pages: [], hits: [], done: false } };
         try {
             r.auth = await signIn(cfg, side);
@@ -130,28 +165,20 @@ try {
             continue;
         }
         for (const p of parts) {
-            const t0 = Date.now();
-            process.stdout.write(`  ${p.suite}… `);
-            if (jevOff && p.tags.includes('jev')) { console.log(`skipped (${jevOff})`); skipped[p.name] = jevOff; continue; }
-            ran.push(p);
-            try {
-                await RUN[p.suite as keyof typeof RUN](r);
-                console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
-            } catch (e) {
-                const msg = (e as Error).message;
-                console.log(`stopped: ${msg}`);
-                r.record({ suite: p.suite, where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
-                if (e instanceof jev.BudgetReached) jevOff = 'Jev budget reached';
-                if (e instanceof SessionExpired) {
-                    for (const q of parts.slice(parts.indexOf(p) + 1)) notRun[q.name] = 'the session expired';
-                    break;
-                }
+            if (jevOff && p.tags.includes('jev')) { console.log(`  ${p.suite}… skipped (${jevOff})`); skipped[p.name] = jevOff; continue; }
+            const flow = flows.find((f) => f.part === p.name);
+            const e = await runPart(p, r.record, () => (flow ? runFlow(flow, r, stub?.url) : RUN[p.suite as keyof typeof RUN](r)));
+            if (e instanceof jev.BudgetReached) jevOff = 'Jev budget reached';
+            if (e instanceof SessionExpired) {
+                for (const q of parts.slice(parts.indexOf(p) + 1)) notRun[q.name] = 'the session expired';
+                break;
             }
         }
     }
 } finally {
     await closeBrowser();
-    stopApp(cfg, app);
+    if (needsApp) stopApp(cfg, app);
+    await stub?.stop();
     const u = jev.usage();
     const note = jevAsked ? `Jev: ${u.calls} calls (avg ${u.avgMs} ms, ${u.cached} from cache), ${u.tokens} input tokens, $${u.usd} of the $${u.budget} budget` : undefined;
     if (jevAsked) jev.savePayloads(dir);

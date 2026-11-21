@@ -10,6 +10,13 @@
     },
     "homepage": "https://github.com/ashishjain15491/tapcheck",
     "type": "module",
+    "exports": {
+        ".": {
+            "types": "./src/flow.ts",
+            "default": "./src/flow.ts"
+        }
+    },
+    "types": "src/flow.ts",
     "bin": {
         "tapcheck": "src/cli.ts"
     },

@@ -16,3 +16,15 @@ tasks:
     optimal: 1
 crawl:
   max: 20
+# The project's own checks: any command, exit 0 passes. Runs as the part `code`, with no app and no browser.
+gates:
+  - { name: every page declares HTML5, run: "! grep -L '<!doctype html>' site/*.html | grep ." }
+# The site's routes, for route coverage in the crawl. A real app prints these with its framework's route lister.
+routes: cat routes.json
+# A stand-in for the outside services an app calls; the example flow asks it for a plant.
+stub:
+  port: 8766
+  rules:
+    - { host: api.example.com, path: /v1/plants/*, json: { name: Boston fern, light: shade } }
+# Journeys written for this site. Unlike the suites, a flow may submit forms and change data.
+flows: tests/tapcheck/*.ts
