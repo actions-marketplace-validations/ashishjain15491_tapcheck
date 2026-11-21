@@ -1,7 +1,8 @@
 /*
  * The browser side every suite shares: one Chromium, a context per viewport (signed in with the side's saved session, or
- * not), page settling, the facts code can measure on a page, and the Run each suite is handed.
+ * not), page settling, the facts code can measure on a page, screenshot slices, and the Run each suite is handed.
  */
+import { mkdirSync } from 'node:fs';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { Config, Screen, Side } from './config.ts';
 import type { Finding } from './report.ts';
@@ -78,6 +79,22 @@ export async function resolve(r: Run, page: Page, s: Screen): Promise<string | n
     const hrefs = await page.$$eval('a[href]', (as) => as.map((a) => (a as HTMLAnchorElement).pathname));
     const hit = hrefs.find((h) => re.test(h));
     return hit ? hit + (s.suffix ?? '') : null;
+}
+
+/** The screen as up to `max` viewport-sized slices, top to bottom, saved as <run dir>/shots/<key>-<n>.png (Jev takes images 280–1568 px a side). */
+export async function slices(r: Run, page: Page, key: string, height: number, vh: number, max = 3) {
+    mkdirSync(`${r.dir}/shots`, { recursive: true });
+    const n = Math.min(max, Math.max(1, Math.ceil(height / vh)));
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) {
+        await page.evaluate((y) => scrollTo(0, y), i * vh);
+        await page.waitForTimeout(250);
+        const file = `${r.dir}/shots/${key}-${i + 1}.png`;
+        await page.screenshot({ path: file });
+        out.push(file);
+    }
+    await page.evaluate(() => scrollTo(0, 0));
+    return out;
 }
 
 export type Control = { tag: string; role: string; label: string; x: number; y: number; w: number; h: number; href?: string };

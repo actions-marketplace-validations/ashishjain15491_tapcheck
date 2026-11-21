@@ -47,7 +47,7 @@ body:has(#hp:not(:checked)) tr.pass{display:none}body:has(#hw:not(:checked)) tr.
 <div class="cards">${bySuite.map((b) => `<div class="card"><b>${esc(b.s)}</b><span class="n ${b.fail ? 'f' : 'p'}">${b.fail ? `${b.fail} failing` : 'clean'}</span><br><span><span class="w">${b.warn} warn</span> · <span class="p">${b.pass} pass</span> · ${b.total} checks</span></div>`).join('')}</div>
 <div class="filters"><label><input type="checkbox" id="hw" checked> warnings</label><label><input type="checkbox" id="hi" checked> info</label><label><input type="checkbox" id="hp"> passes</label></div>
 <div class="wrap"><table><thead><tr><th>Status</th><th>Suite</th><th>Where</th><th>Check</th><th>Detail and evidence</th></tr></thead><tbody>${sorted.map(row).join('')}</tbody></table></div>
-<p class="meta">Raw evidence: findings.json, and per side crawl.json, network.json and axe.json.</p></main></body></html>`;
+<p class="meta">Raw evidence: findings.json, payloads.json (every Jev request), and per side crawl.json, network.json, axe.json and clickstream.json.</p></main></body></html>`;
     writeFileSync(`${dir}/report.html`, html);
 
     const line = (f: Finding) => `- **${key(f)}** · ${f.where} · ${f.check}${f.detail ? `: ${f.detail}` : ''}`;

@@ -3,27 +3,36 @@
  * tapcheck: start (or find) the app, sign in each side, run the suites, write one report.
  *
  *   tapcheck                        every suite on every side, with ./tapcheck.yml
- *   SUITES=crawl,a11y tapcheck      only these suites (crawl, contract, security, a11y)
+ *   SUITES=crawl,a11y tapcheck      only these suites (crawl, contract, security, a11y, ux, usability)
+ *   JEV=off tapcheck                skip the suites Jev judges (ux, usability); also skipped when there is no key
+ *   JEV_BUDGET=0.5 tapcheck         the most to spend on Jev this run, in USD (default jev.budget, or 1)
  *   SIDES=customer tapcheck         only these sides
  *   RESET=1 tapcheck                run app.reset first (refused unless the app is local or allowRemoteReset is set)
  *   LOGIN=1 tapcheck                sign in again by hand on manual sides
  *   TAPCHECK_CONFIG=path tapcheck   another config file
  *
- * Output: <out>/run-<time>/report.html (open it), REPORT.md, findings.json, and per side the raw evidence.
- * Exit code 1 when any check fails. tapcheck only reads: it never submits a form or follows a delete, send or sign-out.
+ * ux and usability ask Jev (TypeSafe): put TYPESAFE_API_KEY in the environment, or in a .env file next to tapcheck.yml.
+ *
+ * Output: <out>/run-<time>/report.html (open it), REPORT.md, findings.json, payloads.json (every Jev request) and per
+ * side the raw evidence. Exit code 1 when any check fails. tapcheck only reads: it never submits a form or follows a
+ * delete, send or sign-out.
  */
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { isLocal, load, type Config } from './config.ts';
 import { signIn } from './auth.ts';
 import { closeBrowser, SessionExpired, type Run } from './browser.ts';
+import * as jev from './jev.ts';
 import { record, write } from './report.ts';
 import * as crawl from './suites/crawl.ts';
 import * as contract from './suites/contract.ts';
 import * as security from './suites/security.ts';
 import * as a11y from './suites/a11y.ts';
+import * as ux from './suites/ux.ts';
+import * as usability from './suites/usability.ts';
 
-const SUITES: Record<string, { run: (r: Run) => Promise<void> }> = { crawl, contract, security, a11y };
+const SUITES: Record<string, { run: (r: Run) => Promise<void> }> = { crawl, contract, security, a11y, ux, usability };
+const JEV = ['ux', 'usability']; // the suites that ask Jev
 const list = (v?: string) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
 async function answers(url: string) {
@@ -60,6 +69,16 @@ const unknownSides = wantSides.filter((s) => !cfg.sides.some((x) => x.name === s
 if (unknownSides.length) throw new Error(`Unknown side(s): ${unknownSides.join(', ')}. tapcheck.yml has ${cfg.sides.map((s) => s.name).join(', ')}.`);
 const sides = cfg.sides.filter((s) => !wantSides.length || wantSides.includes(s.name));
 
+jev.setup(cfg.jev);
+// Why the Jev suites are skipped, or '' when they run. Once the budget is reached it says so, and the rest are skipped too.
+let jevOff = process.env.JEV === 'off' ? 'JEV=off' : jev.apiKey() ? '' : 'no TYPESAFE_API_KEY';
+const jevSuites = suites.filter((s) => JEV.includes(s));
+const jevAsked = !jevOff && jevSuites.length > 0;
+if (jevOff && jevSuites.length && sides.length) {
+    record({ suite: 'jev', side: sides[0].name, where: jevSuites.join(', '), check: 'Jev suites ran', status: 'info',
+        detail: `skipped (${jevOff}). To run them, set TYPESAFE_API_KEY in the environment or in .env here, without JEV=off.` });
+}
+
 const started = Date.now();
 const dir = `${cfg.out}/run-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
 mkdirSync(dir, { recursive: true });
@@ -91,6 +110,7 @@ try {
         for (const s of suites) {
             const t0 = Date.now();
             process.stdout.write(`  ${s}… `);
+            if (jevOff && JEV.includes(s)) { console.log(`skipped (${jevOff})`); continue; }
             try {
                 await SUITES[s].run(r);
                 console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
@@ -98,6 +118,7 @@ try {
                 const msg = (e as Error).message;
                 console.log(`stopped: ${msg}`);
                 r.record({ suite: s, where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
+                if (e instanceof jev.BudgetReached) jevOff = 'Jev budget reached';
                 if (e instanceof SessionExpired) break;
             }
         }
@@ -105,9 +126,13 @@ try {
 } finally {
     await closeBrowser();
     stopApp(cfg, app);
-    const { bySuite, fails } = write(dir, { base: cfg.baseUrl, started });
+    const u = jev.usage();
+    const note = jevAsked ? `Jev: ${u.calls} calls (avg ${u.avgMs} ms, ${u.cached} from cache), ${u.tokens} input tokens, $${u.usd} of the $${u.budget} budget` : undefined;
+    if (jevAsked) jev.savePayloads(dir);
+    const { bySuite, fails } = write(dir, { base: cfg.baseUrl, started, note });
     console.log('');
     console.table(bySuite.map((b) => ({ suite: b.s, failing: b.fail, warnings: b.warn, passing: b.pass })));
+    if (note) console.log(note);
     console.log(`Report: ${dir}/report.html`);
     process.exitCode = fails ? 1 : 0;
 }

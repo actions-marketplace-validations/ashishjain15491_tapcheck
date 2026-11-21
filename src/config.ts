@@ -11,7 +11,9 @@ export type Login =
     | { manual: string } // the sign-in page; a person signs in in a visible browser, the session is kept
     | { form: { url: string; fields: Record<string, string>; submit?: string; totp?: { field: string; secret: string } } }
     | { command: string }; // prints a Playwright storageState JSON on stdout
-export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[] };
+/** A usability task: start at `from`, try to reach the screen `done` describes in about `optimal` clicks; `text` is what a person would type on the way. */
+export type Task = { name: string; from: string; goal: string; done: string; notDone: string; optimal: number; text?: string };
+export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[] };
 export type Config = {
     baseUrl: string;
     app: { start?: string; stop?: string; reset?: string; ready: string; timeout: number; allowRemoteReset: boolean };
@@ -21,6 +23,9 @@ export type Config = {
     security: { csrf?: { method: string; path: string; expect: number }; allowedHosts: string[] };
     viewports: { name: string; width: number; height: number; mobile: boolean }[];
     out: string;
+    audience: string; // who the app is for, in the words Jev is asked with ("a shop owner", "a nurse on a ward")
+    jev: { budget: number; headers: Record<string, string> }; // budget in USD per run; headers are sent with every Jev request
+    i18n: { keys?: string }; // a shell command printing one translation key per line
 };
 
 const DEFAULT_SKIP = '/(logout|log-out|sign-?out|delete|destroy|remove|export|download|impersonat|unsubscribe)|\\.(csv|pdf|zip|png|jpe?g|gif|svg|webp|ico|xlsx?)$';
@@ -94,6 +99,18 @@ function screens(v: unknown, field: string): Screen[] {
     });
 }
 
+function tasks(v: unknown, field: string): Task[] {
+    if (v === undefined) return [];
+    if (!Array.isArray(v)) fail(field, 'must be a list of tasks');
+    return v.map((t, i) => {
+        const at = `${field}[${i}]`;
+        if (!t || typeof t !== 'object') fail(at, 'must be {name, from, goal, done, notDone, optimal}');
+        if (!Number.isInteger(t.optimal) || t.optimal < 1) fail(`${at}.optimal`, 'must be the fewest clicks that reach the goal (a whole number above 0)');
+        return { name: str(t.name, `${at}.name`)!, from: str(t.from, `${at}.from`)!, goal: str(t.goal, `${at}.goal`)!, done: str(t.done, `${at}.done`)!,
+            notDone: str(t.notDone, `${at}.notDone`)!, optimal: t.optimal, text: str(t.text, `${at}.text`, true) };
+    });
+}
+
 /** Checks a parsed (and expanded) config object and fills in the defaults. */
 export function check(raw: any): Config {
     if (!raw || typeof raw !== 'object') fail('', 'must be a YAML mapping');
@@ -104,17 +121,20 @@ export function check(raw: any): Config {
     const app = { start: str(a.start, 'app.start', true), stop: str(a.stop, 'app.stop', true), reset: str(a.reset, 'app.reset', true),
         ready: str(a.ready ?? '/', 'app.ready')!, timeout, allowRemoteReset: a.allowRemoteReset === true };
 
-    // screens: a list (every side) or a map of side → list.
-    const byside = (side: string) => (Array.isArray(raw.screens) ? raw.screens : raw.screens?.[side]);
+    // screens and tasks: a list (every side) or a map of side → list.
+    const byside = (key: 'screens' | 'tasks', side: string) => (Array.isArray(raw[key]) ? raw[key] : raw[key]?.[side]);
+    const at = (key: 'screens' | 'tasks', side: string) => (Array.isArray(raw[key]) ? key : `${key}.${side}`);
     const sideDefs: Record<string, any> = raw.sides ?? { public: {} };
     if (typeof sideDefs !== 'object' || Array.isArray(sideDefs) || !Object.keys(sideDefs).length) fail('sides', 'must map each side name to {login, baseUrl?}');
     const sides = Object.entries(sideDefs).map(([name, s]): Side => {
         if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`sides.${name}`, 'name must be lowercase letters, digits and dashes');
         return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`),
-            screens: screens(byside(name), Array.isArray(raw.screens) ? 'screens' : `screens.${name}`) };
+            screens: screens(byside('screens', name), at('screens', name)), tasks: tasks(byside('tasks', name), at('tasks', name)) };
     });
-    if (raw.screens && !Array.isArray(raw.screens)) {
-        for (const k of Object.keys(raw.screens)) if (!sides.some((s) => s.name === k)) fail(`screens.${k}`, `names a side that isn't in sides (${sides.map((s) => s.name).join(', ')})`);
+    for (const key of ['screens', 'tasks'] as const) {
+        if (!raw[key] || Array.isArray(raw[key])) continue;
+        if (typeof raw[key] !== 'object') fail(key, `must be a list, or map each side to a list`);
+        for (const k of Object.keys(raw[key])) if (!sides.some((s) => s.name === k)) fail(`${key}.${k}`, `names a side that isn't in sides (${sides.map((s) => s.name).join(', ')})`);
     }
 
     const c = raw.crawl ?? {};
@@ -137,7 +157,17 @@ export function check(raw: any): Config {
         v.mobile = v.mobile === true;
     });
 
-    return { baseUrl, app, sides, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
+    const j = raw.jev ?? {};
+    if (typeof j !== 'object' || Array.isArray(j)) fail('jev', 'must be {budget?, headers?}');
+    const budget = process.env.JEV_BUDGET !== undefined ? Number(process.env.JEV_BUDGET) : j.budget ?? 1;
+    if (typeof budget !== 'number' || !(budget > 0)) fail(process.env.JEV_BUDGET !== undefined ? 'JEV_BUDGET (environment)' : 'jev.budget', 'must be a number of US dollars above 0');
+    const headers = j.headers ?? {};
+    if (typeof headers !== 'object' || Array.isArray(headers)) fail('jev.headers', 'must map header names to values');
+    for (const [k, x] of Object.entries(headers)) str(x, `jev.headers.${k}`);
+    if (raw.i18n !== undefined && (!raw.i18n || typeof raw.i18n !== 'object')) fail('i18n', 'must be {keys: <command printing one translation key per line>}');
+
+    return { baseUrl, app, sides, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
+        i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
         crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, security: { csrf, allowedHosts }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };
 }
 

@@ -7,5 +7,8 @@ both pages, checks the JSON the home page fetches, the security headers and acce
 cd examples/static-site && node ../../src/cli.ts
 ```
 
+With a `TYPESAFE_API_KEY` in the environment (or in a `.env` file in this folder), the `ux` and `usability` suites also
+run: Jev judges both pages and tries the one task in `tapcheck.yml`. Without a key, or with `JEV=off`, they are skipped.
+
 Python's server sends no security headers, so the security suite reports them missing. That's expected here and
 shows what a finding looks like.

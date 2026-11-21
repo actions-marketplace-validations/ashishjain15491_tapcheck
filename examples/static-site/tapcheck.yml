@@ -3,8 +3,16 @@ baseUrl: http://127.0.0.1:8765
 app:
   start: python3 -m http.server 8765 --bind 127.0.0.1 --directory site
   ready: /
+audience: someone buying a house plant for the first time
 screens:
   - { name: Home, path: /, purpose: see what the shop sells and how busy it is }
   - { name: Contact, path: /contact.html, purpose: ask the shop a question }
+tasks:
+  - name: Ask a question
+    from: /
+    goal: Find where to ask the shop a question about a plant.
+    done: A contact form with a field for the question is open.
+    notDone: It shows the home page, a different page, or an error.
+    optimal: 1
 crawl:
   max: 20
