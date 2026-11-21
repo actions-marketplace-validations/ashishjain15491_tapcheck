@@ -1,0 +1,13 @@
+node_modules/
+dist/
+# run output: screenshots, sessions, payloads, findings, state
+.tapcheck/
+# secrets and signed-in sessions
+.env
+.env.*
+!.env.example
+*storage-state*.json
+auth*.json
+# local-only list of private names checked before every push; never committed
+.public-denylist
+.DS_Store

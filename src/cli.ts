@@ -1,0 +1,113 @@
+#!/usr/bin/env node
+/*
+ * tapcheck: start (or find) the app, sign in each side, run the suites, write one report.
+ *
+ *   tapcheck                        every suite on every side, with ./tapcheck.yml
+ *   SUITES=crawl,a11y tapcheck      only these suites (crawl, contract, security, a11y)
+ *   SIDES=customer tapcheck         only these sides
+ *   RESET=1 tapcheck                run app.reset first (refused unless the app is local or allowRemoteReset is set)
+ *   LOGIN=1 tapcheck                sign in again by hand on manual sides
+ *   TAPCHECK_CONFIG=path tapcheck   another config file
+ *
+ * Output: <out>/run-<time>/report.html (open it), REPORT.md, findings.json, and per side the raw evidence.
+ * Exit code 1 when any check fails. tapcheck only reads: it never submits a form or follows a delete, send or sign-out.
+ */
+import { execSync, spawn, type ChildProcess } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { isLocal, load, type Config } from './config.ts';
+import { signIn } from './auth.ts';
+import { closeBrowser, SessionExpired, type Run } from './browser.ts';
+import { record, write } from './report.ts';
+import * as crawl from './suites/crawl.ts';
+import * as contract from './suites/contract.ts';
+import * as security from './suites/security.ts';
+import * as a11y from './suites/a11y.ts';
+
+const SUITES: Record<string, { run: (r: Run) => Promise<void> }> = { crawl, contract, security, a11y };
+const list = (v?: string) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+async function answers(url: string) {
+    return fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) }).then((r) => r.status > 0 && r.status < 500).catch(() => false);
+}
+
+/** Starts the app unless it already answers; resolves with the process tapcheck started (to stop it after), if any. */
+async function startApp(cfg: Config): Promise<ChildProcess | null> {
+    const ready = new URL(cfg.app.ready, cfg.baseUrl + '/').href;
+    if (await answers(ready)) return null;
+    if (!cfg.app.start) throw new Error(`The app isn't answering at ${ready}, and tapcheck.yml has no app.start to start it.`);
+    console.log(`Starting the app: ${cfg.app.start}`);
+    const child = spawn('/bin/sh', ['-c', cfg.app.start], { stdio: 'inherit', detached: true });
+    const until = Date.now() + cfg.app.timeout * 1000;
+    while (Date.now() < until) {
+        if (await answers(ready)) return child;
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+    stopApp(cfg, child);
+    throw new Error(`The app didn't answer at ${ready} within ${cfg.app.timeout} s of app.start.`);
+}
+
+function stopApp(cfg: Config, child: ChildProcess | null) {
+    if (cfg.app.stop) { try { execSync(cfg.app.stop, { stdio: 'inherit', shell: '/bin/sh' }); } catch { /* reported by the command itself */ } }
+    if (child?.pid && child.exitCode === null) { try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already gone */ } }
+}
+
+const cfg = load(process.env.TAPCHECK_CONFIG ?? 'tapcheck.yml');
+const suites = list(process.env.SUITES).length ? list(process.env.SUITES) : Object.keys(SUITES);
+const unknownSuites = suites.filter((s) => !(s in SUITES));
+if (unknownSuites.length) throw new Error(`Unknown suite(s): ${unknownSuites.join(', ')}. Choose from ${Object.keys(SUITES).join(', ')}.`);
+const wantSides = list(process.env.SIDES);
+const unknownSides = wantSides.filter((s) => !cfg.sides.some((x) => x.name === s));
+if (unknownSides.length) throw new Error(`Unknown side(s): ${unknownSides.join(', ')}. tapcheck.yml has ${cfg.sides.map((s) => s.name).join(', ')}.`);
+const sides = cfg.sides.filter((s) => !wantSides.length || wantSides.includes(s.name));
+
+const started = Date.now();
+const dir = `${cfg.out}/run-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+mkdirSync(dir, { recursive: true });
+const app = await startApp(cfg);
+const onSignal = () => { stopApp(cfg, app); process.exit(130); };
+process.once('SIGINT', onSignal);
+process.once('SIGTERM', onSignal);
+
+try {
+    if (process.env.RESET === '1') {
+        if (!cfg.app.reset) throw new Error('RESET=1 but tapcheck.yml has no app.reset.');
+        if (!isLocal(cfg.baseUrl) && !cfg.app.allowRemoteReset) {
+            throw new Error(`Refusing to reset ${cfg.baseUrl}: it isn't local. Set app.allowRemoteReset: true if that's really a throwaway copy.`);
+        }
+        console.log(`Resetting: ${cfg.app.reset}`);
+        execSync(cfg.app.reset, { stdio: 'inherit', shell: '/bin/sh' });
+    }
+    for (const side of sides) {
+        const sideDir = `${dir}/${side.name}`;
+        mkdirSync(sideDir, { recursive: true });
+        console.log(`\n${side.name} at ${side.baseUrl}: ${suites.join(', ')}`);
+        const r: Run = { cfg, side, dir: sideDir, record: (f) => record({ ...f, side: side.name }), crawl: { pages: [], hits: [], done: false } };
+        try {
+            r.auth = await signIn(cfg, side);
+        } catch (e) {
+            r.record({ suite: 'sign-in', where: side.baseUrl, check: 'signed in', status: 'fail', detail: (e as Error).message.slice(0, 300) });
+            continue;
+        }
+        for (const s of suites) {
+            const t0 = Date.now();
+            process.stdout.write(`  ${s}… `);
+            try {
+                await SUITES[s].run(r);
+                console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+            } catch (e) {
+                const msg = (e as Error).message;
+                console.log(`stopped: ${msg}`);
+                r.record({ suite: s, where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
+                if (e instanceof SessionExpired) break;
+            }
+        }
+    }
+} finally {
+    await closeBrowser();
+    stopApp(cfg, app);
+    const { bySuite, fails } = write(dir, { base: cfg.baseUrl, started });
+    console.log('');
+    console.table(bySuite.map((b) => ({ suite: b.s, failing: b.fail, warnings: b.warn, passing: b.pass })));
+    console.log(`Report: ${dir}/report.html`);
+    process.exitCode = fails ? 1 : 0;
+}

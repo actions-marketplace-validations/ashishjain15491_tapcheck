@@ -1,0 +1,10 @@
+# A static site with no sign-in. Run from this folder:  node ../../src/cli.ts
+baseUrl: http://127.0.0.1:8765
+app:
+  start: python3 -m http.server 8765 --bind 127.0.0.1 --directory site
+  ready: /
+screens:
+  - { name: Home, path: /, purpose: see what the shop sells and how busy it is }
+  - { name: Contact, path: /contact.html, purpose: ask the shop a question }
+crawl:
+  max: 20
