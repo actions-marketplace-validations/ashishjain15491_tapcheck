@@ -13,6 +13,8 @@ export type Login =
     | { command: string }; // prints a Playwright storageState JSON on stdout
 /** A usability task: start at `from`, try to reach the screen `done` describes in about `optimal` clicks; `text` is what a person would type on the way. */
 export type Task = { name: string; from: string; goal: string; done: string; notDone: string; optimal: number; text?: string };
+/** Every suite, in run order. */
+export const SUITES = ['crawl', 'contract', 'security', 'a11y', 'ux', 'usability'] as const;
 export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[] };
 export type Config = {
     baseUrl: string;
@@ -26,6 +28,9 @@ export type Config = {
     audience: string; // who the app is for, in the words Jev is asked with ("a shop owner", "a nurse on a ward")
     jev: { budget: number; headers: Record<string, string> }; // budget in USD per run; headers are sent with every Jev request
     i18n: { keys?: string }; // a shell command printing one translation key per line
+    // CHANGED=1: which files each suite depends on, as globs on paths from the git root ("*" is every suite). A suite
+    // with no globs reruns on any change. Globs are Node's path.matchesGlob: * and ** don't match names starting with a dot.
+    changes: Record<string, string[]>;
 };
 
 const DEFAULT_SKIP = '/(logout|log-out|sign-?out|delete|destroy|remove|export|download|impersonat|unsubscribe)|\\.(csv|pdf|zip|png|jpe?g|gif|svg|webp|ico|xlsx?)$';
@@ -128,6 +133,8 @@ export function check(raw: any): Config {
     if (typeof sideDefs !== 'object' || Array.isArray(sideDefs) || !Object.keys(sideDefs).length) fail('sides', 'must map each side name to {login, baseUrl?}');
     const sides = Object.entries(sideDefs).map(([name, s]): Side => {
         if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`sides.${name}`, 'name must be lowercase letters, digits and dashes');
+        // Side names are tags too (ONLY=<side>), so they can't reuse a suite or kind tag.
+        if ([...SUITES, 'jev', 'measured'].includes(name)) fail(`sides.${name}`, `name can't be a suite or tag name (${[...SUITES, 'jev', 'measured'].join(', ')})`);
         return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`),
             screens: screens(byside('screens', name), at('screens', name)), tasks: tasks(byside('tasks', name), at('tasks', name)) };
     });
@@ -166,7 +173,15 @@ export function check(raw: any): Config {
     for (const [k, x] of Object.entries(headers)) str(x, `jev.headers.${k}`);
     if (raw.i18n !== undefined && (!raw.i18n || typeof raw.i18n !== 'object')) fail('i18n', 'must be {keys: <command printing one translation key per line>}');
 
-    return { baseUrl, app, sides, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
+    const changes = raw.changes ?? {};
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) fail('changes', 'must map a suite name (or "*") to a list of globs');
+    for (const [k, globs] of Object.entries(changes)) {
+        if (k !== '*' && !(SUITES as readonly string[]).includes(k)) fail(`changes.${k}`, `names a suite that doesn't exist (use "*" or one of ${SUITES.join(', ')})`);
+        if (!Array.isArray(globs) || !globs.length) fail(`changes.${k}`, 'must be a list of globs, e.g. ["src/**"]');
+        globs.forEach((g, i) => str(g, `changes.${k}[${i}]`));
+    }
+
+    return { baseUrl, app, sides, changes, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
         crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, security: { csrf, allowedHosts }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };
 }

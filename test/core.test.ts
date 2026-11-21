@@ -39,8 +39,15 @@ test('config: errors name the field', () => {
     assert.throws(() => check({ baseUrl: 'http://x', screens: { admin: [] } }), /screens\.admin names a side/);
     assert.throws(() => check({ baseUrl: 'http://x', sides: { a: { login: { form: { url: '/l' } } } } }), /form\.fields must map/);
     assert.throws(() => check({ baseUrl: 'http://x', sides: { a: { login: { magic: 1 } } } }), /unknown kind "magic"/);
+    assert.throws(() => check({ baseUrl: 'http://x', sides: { jev: {} } }), /sides\.jev name can't be a suite or tag name/);
     assert.throws(() => check({ baseUrl: 'http://x', crawl: { skip: '(' } }), /crawl\.skip is not a valid regular expression/);
     assert.throws(() => check({ baseUrl: 'http://x', security: { csrf: { path: '/p' } } }), /csrf\.expect must be/);
+    assert.throws(() => check({ baseUrl: 'http://x', changes: ['src/**'] }), /changes must map a suite name/);
+    assert.throws(() => check({ baseUrl: 'http://x', changes: { e2e: ['src/**'] } }), /changes\.e2e names a suite that doesn't exist/);
+    assert.throws(() => check({ baseUrl: 'http://x', changes: { ux: 'src/**' } }), /changes\.ux must be a list of globs/);
+    assert.throws(() => check({ baseUrl: 'http://x', changes: { '*': ['src/**', ''] } }), /changes\.\*\[1\] must be a non-empty string/);
+    assert.deepEqual(check({ baseUrl: 'http://x', changes: { '*': ['src/**'], a11y: ['**/*.css'] } }).changes, { '*': ['src/**'], a11y: ['**/*.css'] });
+    assert.deepEqual(check({ baseUrl: 'http://x' }).changes, {});
 });
 
 test('config: $VARS come from the environment, missing ones fail', () => {

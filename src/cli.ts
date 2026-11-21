@@ -2,11 +2,17 @@
 /*
  * tapcheck: start (or find) the app, sign in each side, run the suites, write one report.
  *
- *   tapcheck                        every suite on every side, with ./tapcheck.yml
- *   SUITES=crawl,a11y tapcheck      only these suites (crawl, contract, security, a11y, ux, usability)
+ * Every suite on every side is a part, named <suite>-<side> (crawl-public, ux-customer), tagged with its suite, its
+ * side, and jev (ux, usability) or measured (crawl, contract, security, a11y).
+ *
+ *   tapcheck                        every part, with ./tapcheck.yml
+ *   ONLY=crawl,a11y tapcheck        only these parts: part names or tags, comma-separated; a trailing * matches name prefixes
+ *   ONLY=customer SKIP=jev tapcheck SKIP takes parts out again (contract and security still bring their side's crawl)
+ *   CHANGED=1 tapcheck              of the chosen parts, only those whose files changed since each last passed (needs git;
+ *                                   `changes:` in tapcheck.yml says which files count for which suite)
+ *   LIST=1 tapcheck                 print the parts and their tags, mark what would run, and exit
  *   JEV=off tapcheck                skip the suites Jev judges (ux, usability); also skipped when there is no key
  *   JEV_BUDGET=0.5 tapcheck         the most to spend on Jev this run, in USD (default jev.budget, or 1)
- *   SIDES=customer tapcheck         only these sides
  *   RESET=1 tapcheck                run app.reset first (refused unless the app is local or allowRemoteReset is set)
  *   LOGIN=1 tapcheck                sign in again by hand on manual sides
  *   TAPCHECK_CONFIG=path tapcheck   another config file
@@ -14,16 +20,17 @@
  * ux and usability ask Jev (TypeSafe): put TYPESAFE_API_KEY in the environment, or in a .env file next to tapcheck.yml.
  *
  * Output: <out>/run-<time>/report.html (open it), REPORT.md, findings.json, payloads.json (every Jev request) and per
- * side the raw evidence. Exit code 1 when any check fails. tapcheck only reads: it never submits a form or follows a
+ * side the raw evidence. <out>/state.json remembers the code each part last passed at. Exit code 1 when any check fails. tapcheck only reads: it never submits a form or follows a
  * delete, send or sign-out.
  */
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
-import { isLocal, load, type Config } from './config.ts';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { isLocal, load, SUITES, type Config } from './config.ts';
+import { build, changedParts, list, mark, select, snapshot, withNeeds, type State } from './parts.ts';
 import { signIn } from './auth.ts';
 import { closeBrowser, SessionExpired, type Run } from './browser.ts';
 import * as jev from './jev.ts';
-import { record, write } from './report.ts';
+import { findings, record, write } from './report.ts';
 import * as crawl from './suites/crawl.ts';
 import * as contract from './suites/contract.ts';
 import * as security from './suites/security.ts';
@@ -31,9 +38,7 @@ import * as a11y from './suites/a11y.ts';
 import * as ux from './suites/ux.ts';
 import * as usability from './suites/usability.ts';
 
-const SUITES: Record<string, { run: (r: Run) => Promise<void> }> = { crawl, contract, security, a11y, ux, usability };
-const JEV = ['ux', 'usability']; // the suites that ask Jev
-const list = (v?: string) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const RUN: Record<(typeof SUITES)[number], (r: Run) => Promise<void>> = { crawl: crawl.run, contract: contract.run, security: security.run, a11y: a11y.run, ux: ux.run, usability: usability.run };
 
 async function answers(url: string) {
     return fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) }).then((r) => r.status > 0 && r.status < 500).catch(() => false);
@@ -60,24 +65,38 @@ function stopApp(cfg: Config, child: ChildProcess | null) {
     if (child?.pid && child.exitCode === null) { try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already gone */ } }
 }
 
-const cfg = load(process.env.TAPCHECK_CONFIG ?? 'tapcheck.yml');
-const suites = list(process.env.SUITES).length ? list(process.env.SUITES) : Object.keys(SUITES);
-const unknownSuites = suites.filter((s) => !(s in SUITES));
-if (unknownSuites.length) throw new Error(`Unknown suite(s): ${unknownSuites.join(', ')}. Choose from ${Object.keys(SUITES).join(', ')}.`);
-const wantSides = list(process.env.SIDES);
-const unknownSides = wantSides.filter((s) => !cfg.sides.some((x) => x.name === s));
-if (unknownSides.length) throw new Error(`Unknown side(s): ${unknownSides.join(', ')}. tapcheck.yml has ${cfg.sides.map((s) => s.name).join(', ')}.`);
-const sides = cfg.sides.filter((s) => !wantSides.length || wantSides.includes(s.name));
+const configFile = process.env.TAPCHECK_CONFIG ?? 'tapcheck.yml';
+const cfg = load(configFile);
+const PARTS = build(cfg.sides.map((s) => s.name));
+const statePath = `${cfg.out}/state.json`;
+const state: State = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { parts: {} };
+let chosen = select(PARTS, list(process.env.ONLY), list(process.env.SKIP));
+if (process.env.CHANGED === '1') chosen = changedParts(chosen, state, cfg.changes, { config: configFile, out: cfg.out });
+chosen = withNeeds(PARTS, chosen);
+
+if (process.env.LIST === '1') {
+    const w = Math.max(...PARTS.map((p) => p.name.length));
+    for (const p of PARTS) console.log(`${chosen.includes(p) ? '▶' : ' '} ${p.name.padEnd(w)}  ${p.tags.join(', ')}`);
+    process.exit(0);
+}
+if (!chosen.length) {
+    console.log(`Nothing to run: ${process.env.CHANGED === '1' ? 'no chosen part has changed files since it last passed.' : 'SKIP took out every chosen part.'}`);
+    process.exit(0);
+}
+console.log(`Running: ${chosen.map((p) => p.name).join(', ')}`);
 
 jev.setup(cfg.jev);
-// Why the Jev suites are skipped, or '' when they run. Once the budget is reached it says so, and the rest are skipped too.
+// Why the Jev parts are skipped, or '' when they run. Once the budget is reached it says so, and the rest are skipped too.
 let jevOff = process.env.JEV === 'off' ? 'JEV=off' : jev.apiKey() ? '' : 'no TYPESAFE_API_KEY';
-const jevSuites = suites.filter((s) => JEV.includes(s));
-const jevAsked = !jevOff && jevSuites.length > 0;
-if (jevOff && jevSuites.length && sides.length) {
-    record({ suite: 'jev', side: sides[0].name, where: jevSuites.join(', '), check: 'Jev suites ran', status: 'info',
+const jevParts = chosen.filter((p) => p.tags.includes('jev'));
+const jevAsked = !jevOff && jevParts.length > 0;
+if (jevOff && jevParts.length) {
+    record({ suite: 'jev', side: jevParts[0].side, where: jevParts.map((p) => p.name).join(', '), check: 'Jev suites ran', status: 'info',
         detail: `skipped (${jevOff}). To run them, set TYPESAFE_API_KEY in the environment or in .env here, without JEV=off.` });
 }
+const ran: typeof chosen = []; // parts that ran, to the end or not
+const skipped: Record<string, string> = {}; // Jev parts left out, and why: neither passed nor failed
+const notRun: Record<string, string> = {}; // parts that couldn't run, and why: they count as failed
 
 const started = Date.now();
 const dir = `${cfg.out}/run-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
@@ -96,30 +115,37 @@ try {
         console.log(`Resetting: ${cfg.app.reset}`);
         execSync(cfg.app.reset, { stdio: 'inherit', shell: '/bin/sh' });
     }
-    for (const side of sides) {
+    for (const side of cfg.sides) {
+        const parts = chosen.filter((p) => p.side === side.name);
+        if (!parts.length) continue;
         const sideDir = `${dir}/${side.name}`;
         mkdirSync(sideDir, { recursive: true });
-        console.log(`\n${side.name} at ${side.baseUrl}: ${suites.join(', ')}`);
+        console.log(`\n${side.name} at ${side.baseUrl}: ${parts.map((p) => p.suite).join(', ')}`);
         const r: Run = { cfg, side, dir: sideDir, record: (f) => record({ ...f, side: side.name }), crawl: { pages: [], hits: [], done: false } };
         try {
             r.auth = await signIn(cfg, side);
         } catch (e) {
             r.record({ suite: 'sign-in', where: side.baseUrl, check: 'signed in', status: 'fail', detail: (e as Error).message.slice(0, 300) });
+            for (const p of parts) notRun[p.name] = 'sign-in failed';
             continue;
         }
-        for (const s of suites) {
+        for (const p of parts) {
             const t0 = Date.now();
-            process.stdout.write(`  ${s}… `);
-            if (jevOff && JEV.includes(s)) { console.log(`skipped (${jevOff})`); continue; }
+            process.stdout.write(`  ${p.suite}… `);
+            if (jevOff && p.tags.includes('jev')) { console.log(`skipped (${jevOff})`); skipped[p.name] = jevOff; continue; }
+            ran.push(p);
             try {
-                await SUITES[s].run(r);
+                await RUN[p.suite as keyof typeof RUN](r);
                 console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
             } catch (e) {
                 const msg = (e as Error).message;
                 console.log(`stopped: ${msg}`);
-                r.record({ suite: s, where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
+                r.record({ suite: p.suite, where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
                 if (e instanceof jev.BudgetReached) jevOff = 'Jev budget reached';
-                if (e instanceof SessionExpired) break;
+                if (e instanceof SessionExpired) {
+                    for (const q of parts.slice(parts.indexOf(p) + 1)) notRun[q.name] = 'the session expired';
+                    break;
+                }
             }
         }
     }
@@ -133,6 +159,13 @@ try {
     console.log('');
     console.table(bySuite.map((b) => ({ suite: b.s, failing: b.fail, warnings: b.warn, passing: b.pass })));
     if (note) console.log(note);
+    const passed = mark(state, ran, findings, snapshot());
+    for (const p of chosen) {
+        if (p.name in skipped) { console.log(`  – ${p.name} (skipped: ${skipped[p.name]})`); continue; }
+        if (!passed[p.name]) delete state.parts[p.name];
+        console.log(`  ${passed[p.name] ? '✓' : '✗'} ${p.name}${p.name in notRun ? ` (not run: ${notRun[p.name]})` : ran.includes(p) ? '' : ' (not run)'}`);
+    }
+    writeFileSync(statePath, JSON.stringify(state, null, 1));
     console.log(`Report: ${dir}/report.html`);
     process.exitCode = fails ? 1 : 0;
 }
