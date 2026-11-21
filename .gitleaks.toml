@@ -1,0 +1,7 @@
+# gitleaks: the default rules, plus the fake values tapcheck's own tests use to check its secret scanner.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake secrets in test/ that exercise tapcheck's secret patterns"
+regexes = ['''AKIAABCDEFGHIJKLMNOP''']
