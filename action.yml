@@ -1,0 +1,93 @@
+name: tapcheck
+description: 'End-to-end and UI audit of a running web app: crawl, API contract, security, accessibility, and Jev judgments of what people see.'
+author: ashishjain15491
+branding:
+  icon: check-circle
+  color: blue
+
+# The job must make the app reachable first: either tapcheck.yml has an app.start the runner can run, or an earlier
+# step started it. Jev (the ux and usability suites) runs only when the caller passes the key:
+#
+#   - uses: ashishjain15491/tapcheck@v0.1.0
+#     env:
+#       TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+#
+# Without it those two suites are skipped and everything else runs. The action posts no pull-request comment (that
+# needs write permissions): the report goes to the job summary and to an artifact.
+inputs:
+  config:
+    description: The config file, relative to working-directory.
+    default: tapcheck.yml
+  only:
+    description: 'Only these parts: part names or tags, comma-separated (crawl,a11y · measured · flow-*). Empty runs every part.'
+    default: ''
+  skip:
+    description: Parts or tags to leave out, comma-separated (jev, flow, usability).
+    default: ''
+  changed:
+    description: 'true runs only the parts whose files changed since each last passed. It needs the state file from an earlier run (<out>/state.json, restored with actions/cache) and a checkout with history; without the state file every part runs.'
+    default: 'false'
+  jev-budget:
+    description: The most to spend on Jev in this run, in US dollars. Empty uses jev.budget from the config (default 1).
+    default: ''
+  working-directory:
+    description: The folder tapcheck runs in; app.start, .env and the output folder resolve from it.
+    default: .
+  node-version:
+    description: The Node.js version to run tapcheck with (22.18 or newer).
+    default: '24'
+  artifact-name:
+    description: The name of the uploaded run folder. Give each call its own when a job or a matrix runs the action more than once.
+    default: tapcheck-report
+outputs:
+  report-dir:
+    description: The run folder (report.html, REPORT.md, findings.json and the evidence), relative to working-directory. Empty when the run could not start.
+    value: ${{ steps.run.outputs.report-dir }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+    - name: Install tapcheck and Chromium
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm ci --no-audit --no-fund
+        npm run build
+        npx playwright install --with-deps chromium
+    - name: Run tapcheck
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TAPCHECK_CONFIG: ${{ inputs.config }}
+        ONLY: ${{ inputs.only }}
+        SKIP: ${{ inputs.skip }}
+        INPUT_CHANGED: ${{ inputs.changed }}
+        INPUT_JEV_BUDGET: ${{ inputs.jev-budget }}
+      run: |
+        if [ "$INPUT_CHANGED" = "true" ]; then export CHANGED=1; fi
+        if [ -n "$INPUT_JEV_BUDGET" ]; then export JEV_BUDGET="$INPUT_JEV_BUDGET"; fi
+        set +e
+        node "$GITHUB_ACTION_PATH/dist/cli.js" | tee "$RUNNER_TEMP/tapcheck.log"
+        code=${PIPESTATUS[0]}
+        # The run's last line names its folder: "Report: <dir>/report.html".
+        dir=$(sed -n 's|^Report: \(.*\)/report\.html$|\1|p' "$RUNNER_TEMP/tapcheck.log" | tail -1)
+        echo "report-dir=$dir" >> "$GITHUB_OUTPUT"
+        exit "$code"
+    - name: Add the report to the job summary
+      if: ${{ !cancelled() && steps.run.outputs.report-dir != '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        REPORT_DIR: ${{ steps.run.outputs.report-dir }}
+      run: cat "$REPORT_DIR/REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload the run folder
+      if: ${{ !cancelled() && steps.run.outputs.report-dir != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.working-directory }}/${{ steps.run.outputs.report-dir }}
+        include-hidden-files: true

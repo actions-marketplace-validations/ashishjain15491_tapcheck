@@ -5,6 +5,16 @@ folder; `app.*`, `login.command` and `i18n.keys` run from the folder tapcheck is
 `tapcheck.yml` is. `$NAME` and `${NAME}` (capitals) in any string are filled in from the environment; a missing one
 stops the load. Unknown keys are ignored without a message, so check spelling against this page.
 
+The same keys as JSON Schema are in `schema/tapcheck.schema.json` in the tapcheck folder. Put this as the file's first
+line and an editor with the YAML language server completes the keys and marks a misspelt one:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ashishjain15491/tapcheck/main/schema/tapcheck.schema.json
+```
+
+(With tapcheck installed from npm in the project, `$schema=./node_modules/tapcheck/schema/tapcheck.schema.json` works
+offline.)
+
 ```yaml
 baseUrl: http://127.0.0.1:8000      # http(s) URL of the running app
 
@@ -151,7 +161,8 @@ say so to the user instead of changing the app during setup.
 
 ## flows
 
-Journeys only this app has, written as TypeScript or JavaScript files; each is its own part, `flow-<name>`. Unlike the
+Journeys only this app has, written as TypeScript or JavaScript files (ES modules: in a project whose `package.json`
+says `"type": "commonjs"`, name them `.mts` or `.mjs`); each is its own part, `flow-<name>`. Unlike the
 suites, a flow may submit forms and change data, so it belongs with `app.reset` and `RESET=1`. The file format and
 the `t` helpers (`t.goto`, `t.page`, `t.step`, `t.expect`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
 top of `src/flow.ts` in the tapcheck folder (`<skill base directory>/../../src/flow.ts`), with a working example in

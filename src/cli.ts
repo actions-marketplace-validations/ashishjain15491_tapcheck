@@ -34,7 +34,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isLocal, load, SUITES, type Config } from './config.ts';
 import { build, changedParts, findingSuite, list, mark, select, snapshot, withNeeds, type Part, type State } from './parts.ts';
 import { signIn } from './auth.ts';
-import { closeBrowser, SessionExpired, type Run } from './browser.ts';
+import { closeBrowser, launch, SessionExpired, type Run } from './browser.ts';
 import * as jev from './jev.ts';
 import { loadFlows, runFlow } from './flow.ts';
 import { findings, record, write } from './report.ts';
@@ -137,8 +137,14 @@ async function runPart(p: Part, rec: Run['record'], fn: () => Promise<void>): Pr
 const started = Date.now();
 const dir = `${cfg.out}/run-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
 mkdirSync(dir, { recursive: true });
-const stub = cfg.stub ? await startStub(cfg.stub, cfg.out, cfg.root) : null; // before the app, which is started with its address
 const needsApp = chosen.some((p) => p.side); // the code part alone needs neither the app nor a browser
+// The browser first, before anything else starts: a missing Chromium is one line here, not Playwright's long error in every part.
+if (needsApp) {
+    await launch().catch((e: Error) => {
+        throw new Error(/Executable doesn't exist|playwright install/.test(e.message) ? "Chromium isn't installed. Run: npx playwright install chromium" : e.message);
+    });
+}
+const stub = cfg.stub ? await startStub(cfg.stub, cfg.out, cfg.root) : null; // before the app, which is started with its address
 const app = needsApp ? await startApp(cfg).catch(async (e) => { await stub?.stop(); throw e; }) : null;
 const onSignal = () => { if (needsApp) stopApp(cfg, app); process.exit(130); };
 process.once('SIGINT', onSignal);

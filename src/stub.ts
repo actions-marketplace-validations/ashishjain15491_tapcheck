@@ -112,7 +112,7 @@ export async function start(cfg: NonNullable<Config['stub']>, out: string, root 
         else {
             const r = match(cfg.rules, host, method, path);
             if (r?.delayMs) await new Promise((done) => setTimeout(done, r.delayMs));
-            const type = r?.file ? { 'content-type': TYPES[r.file.split('.').pop()!] ?? 'application/octet-stream' } : {};
+            const type: Record<string, string> = r?.file ? { 'content-type': TYPES[r.file.split('.').pop()!] ?? 'application/octet-stream' } : {};
             status = send(res, r?.status ?? 200, r?.file ? readFileSync(resolve(root, r.file)) : r?.body ?? r?.json ?? {}, { ...type, ...r?.headers });
         }
         const seen: Seen = { t, method, host, path, query: Object.fromEntries(u.searchParams), body: typeof body === 'string' ? body.slice(0, 65_536) : body, status, ms: Date.now() - t,

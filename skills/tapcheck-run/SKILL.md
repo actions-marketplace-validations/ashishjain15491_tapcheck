@@ -15,6 +15,9 @@ description: >
 installs its dependencies and a browser). Options are environment variables in front of it. Run it from the folder
 that holds `tapcheck.yml`; if that file is missing, stop and use the `tapcheck-setup` skill.
 
+If there is no `bin/tapcheck` there (the skill was copied on its own), `npx tapcheck@<version>` is the same CLI from
+npm once it is published; see the `tapcheck-setup` skill.
+
 ## 1. Choose the parts
 
 Every suite on every side is a part, `<suite>-<side>` (`crawl-public`, `ux-customer`); `code` is the project's own
@@ -58,10 +61,11 @@ marked so; mention it and the `JEV_BUDGET` that would let them finish.
 
 Run the command in the foreground and give it time: a full run takes minutes (allow 10; more with many screens).
 The app's own log lines are mixed into the output; tapcheck's summary table and the list of parts are at the end.
-Exit code 0 means no failing finding, 1 means at least one, or that the run could not start.
+Exit code 0 means no failing finding, 1 at least one, 2 that the run could not start.
 
 - Ends with a `Report: <dir>/report.html` line: the run completed. Go to step 3.
-- Stops with `tapcheck.yml: <field> …`, "environment variable … is not set", or "The app isn't answering": the run
+- Stops with `tapcheck: tapcheck.yml: <field> …`, "environment variable … is not set", "The app isn't answering" or
+  "Chromium isn't installed. Run: npx playwright install chromium" (run that command, then again): the run
   didn't start. Report the message; fix `tapcheck.yml` only if the cause is plainly in it (see `tapcheck-setup`), and
   tell the user which variable to export rather than inventing a value.
 

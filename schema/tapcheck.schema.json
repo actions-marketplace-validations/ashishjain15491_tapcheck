@@ -1,0 +1,282 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://raw.githubusercontent.com/ashishjain15491/tapcheck/main/schema/tapcheck.schema.json",
+    "title": "tapcheck.yml",
+    "description": "What tapcheck needs to know about one web app. Only baseUrl is required. $NAME and ${NAME} (capitals) in any string are filled in from the environment when the file loads. Paths in gates, routes, flows and stub files are relative to this file's folder.",
+    "type": "object",
+    "required": ["baseUrl"],
+    "additionalProperties": false,
+    "properties": {
+        "baseUrl": {
+            "description": "The http(s) address of the running app. A trailing slash is dropped.",
+            "type": "string",
+            "pattern": "^(https?://[^/]+|.*\\$\\{?[A-Z_])"
+        },
+        "app": {
+            "description": "How to start, stop and reset the app.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "start": { "$ref": "#/definitions/text", "description": "Shell command that starts the app. Skipped when the app already answers at `ready`; its whole process group is stopped after the run." },
+                "stop": { "$ref": "#/definitions/text", "description": "Optional extra shell command run after the run." },
+                "reset": { "$ref": "#/definitions/text", "description": "Shell command that puts the test data back. Runs first when RESET=1; refused unless baseUrl is localhost, 127.0.0.1, *.localhost or *.test." },
+                "ready": { "$ref": "#/definitions/text", "description": "A path that answers once the app is up; any status under 500 counts.", "default": "/" },
+                "timeout": { "description": "Seconds to wait for `ready` after `start`.", "type": "number", "exclusiveMinimum": 0, "default": 120 },
+                "allowRemoteReset": { "description": "true lets RESET=1 run against an address that isn't local. Only for a remote throwaway copy.", "type": "boolean", "default": false }
+            }
+        },
+        "audience": { "$ref": "#/definitions/text", "description": "Who the app is for, in the words Jev is asked with (\"a shop owner\", \"a nurse on a ward\").", "default": "a first-time visitor" },
+        "sides": {
+            "description": "Each kind of person who sees a different app, by name. Names are lowercase letters, digits and dashes, and can't be a suite or tag name.",
+            "type": "object",
+            "minProperties": 1,
+            "default": { "public": {} },
+            "propertyNames": {
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "not": { "enum": ["crawl", "contract", "security", "a11y", "ux", "usability", "code", "flow", "jev", "measured"] }
+            },
+            "additionalProperties": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "baseUrl": { "description": "This side's own address, when it differs from the top-level baseUrl.", "type": "string", "pattern": "^(https?://[^/]+|.*\\$\\{?[A-Z_])" },
+                    "login": { "$ref": "#/definitions/login" }
+                }
+            }
+        },
+        "screens": {
+            "description": "The pages a11y and ux audit and the crawl starts from: a list for every side, or a map of side name to list. With none, all three use /.",
+            "oneOf": [
+                { "type": "array", "items": { "$ref": "#/definitions/screen" } },
+                { "type": "object", "additionalProperties": { "type": "array", "items": { "$ref": "#/definitions/screen" } } }
+            ]
+        },
+        "tasks": {
+            "description": "What a first-time user comes to do, for the usability suite: a list for every side, or a map of side name to list.",
+            "oneOf": [
+                { "type": "array", "items": { "$ref": "#/definitions/task" } },
+                { "type": "object", "additionalProperties": { "type": "array", "items": { "$ref": "#/definitions/task" } } }
+            ]
+        },
+        "loginPaths": {
+            "$ref": "#/definitions/text",
+            "description": "Regular expression (case-insensitive) on a URL path. Being sent to a matching path means \"not signed in\".",
+            "default": "/(login|sign-?in|two-factor|2fa)(/|$)"
+        },
+        "crawl": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "max": { "description": "Most pages crawled per side.", "type": "integer", "minimum": 1, "default": 60 },
+                "skip": {
+                    "$ref": "#/definitions/text",
+                    "description": "Regular expression (case-insensitive) of links never followed. Setting it replaces the default.",
+                    "default": "/(logout|log-out|sign-?out|delete|destroy|remove|export|download|impersonat|unsubscribe)|\\.(csv|pdf|zip|png|jpe?g|gif|svg|webp|ico|xlsx?)$"
+                }
+            }
+        },
+        "security": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "csrf": {
+                    "description": "A request sent signed in and without a token; it must be refused with exactly `expect`.",
+                    "type": "object",
+                    "required": ["path", "expect"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "method": { "$ref": "#/definitions/text", "default": "POST" },
+                        "path": { "$ref": "#/definitions/text" },
+                        "expect": { "description": "The HTTP status the app answers with, e.g. 403 or 419.", "type": "integer" }
+                    }
+                },
+                "allowedHosts": { "description": "Third-party hosts the pages may call; a request to any other is a failing finding.", "type": "array", "items": { "type": "string" }, "default": [] },
+                "publicWrites": { "$ref": "#/definitions/text", "description": "Regular expression (case-insensitive) of POST/PUT/PATCH/DELETE routes that need no sign-in on purpose, e.g. ^/(login|webhooks/)." }
+            }
+        },
+        "viewports": {
+            "description": "The screen sizes a11y and ux run on; the first is used by the crawl and flows.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["name", "width", "height"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "$ref": "#/definitions/text" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" },
+                    "mobile": { "description": "Emulate a touch phone.", "type": "boolean", "default": false }
+                }
+            },
+            "default": [
+                { "name": "desktop", "width": 1440, "height": 900, "mobile": false },
+                { "name": "mobile", "width": 390, "height": 844, "mobile": true }
+            ]
+        },
+        "out": { "$ref": "#/definitions/text", "description": "Where runs, signed-in sessions and state go. Git-ignore it.", "default": ".tapcheck" },
+        "jev": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "budget": { "description": "Most US dollars one run may spend on Jev. JEV_BUDGET overrides it.", "type": "number", "exclusiveMinimum": 0, "default": 1 },
+                "headers": { "description": "Extra headers sent with every Jev request.", "type": "object", "additionalProperties": { "$ref": "#/definitions/text" }, "default": {} }
+            }
+        },
+        "i18n": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "keys": { "$ref": "#/definitions/text", "description": "Shell command printing one translation key per line; ux then flags pages that show a raw key. Only dotted keys (orders.title) count." }
+            }
+        },
+        "changes": {
+            "description": "For CHANGED=1: which files each suite depends on, as globs on paths from the git root. \"*\" adds to every suite; a suite with no globs reruns on any change.",
+            "type": "object",
+            "propertyNames": { "enum": ["*", "crawl", "contract", "security", "a11y", "ux", "usability", "code", "flow"] },
+            "additionalProperties": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/text" } },
+            "default": {}
+        },
+        "gates": {
+            "description": "Commands from the project's own toolchain, run as the part `code`. Exit 0 passes.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "run"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "$ref": "#/definitions/text" },
+                    "run": { "$ref": "#/definitions/text", "description": "Shell command, run from this file's folder." },
+                    "timeout": { "description": "Seconds before the gate is stopped and fails.", "type": "number", "exclusiveMinimum": 0, "default": 600 },
+                    "warn": { "description": "true makes a non-zero exit a warning instead of a failure.", "type": "boolean", "default": false }
+                }
+            },
+            "default": []
+        },
+        "routes": { "$ref": "#/definitions/text", "description": "Shell command printing the app's routes as JSON: [{method, path, auth?}]." },
+        "stub": {
+            "description": "A stand-in server for the outside services the app calls. Its address is TAPCHECK_STUB_URL.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8310 },
+                "rules": {
+                    "description": "The first matching rule answers; anything unmatched gets 200 {}.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "host": { "$ref": "#/definitions/text", "description": "The outside host; also matches its subdomains." },
+                            "method": { "$ref": "#/definitions/text" },
+                            "path": { "$ref": "#/definitions/text", "description": "A glob, or a regular expression when it starts with ^." },
+                            "status": { "type": "integer", "minimum": 100, "maximum": 599, "default": 200 },
+                            "json": { "description": "The answer, sent as JSON." },
+                            "body": { "description": "The answer, sent as text.", "type": ["string", "number", "boolean"] },
+                            "file": { "$ref": "#/definitions/text", "description": "A file holding the answer, relative to this file's folder. It must exist." },
+                            "headers": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+                            "delayMs": { "description": "Milliseconds to wait before answering.", "type": "number", "minimum": 0, "default": 0 }
+                        },
+                        "not": {
+                            "description": "A rule takes one of json, body or file.",
+                            "anyOf": [{ "required": ["json", "body"] }, { "required": ["json", "file"] }, { "required": ["body", "file"] }]
+                        }
+                    },
+                    "default": []
+                }
+            }
+        },
+        "flows": {
+            "description": "Globs of flow files (TypeScript or JavaScript); each file is its own part, flow-<name>. Flows may change data.",
+            "oneOf": [{ "$ref": "#/definitions/text" }, { "type": "array", "items": { "$ref": "#/definitions/text" } }],
+            "default": []
+        },
+        "mail": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "mailpit": { "description": "The address of Mailpit's web page, for t.mail in flows.", "type": "string", "pattern": "^(https?://[^/]+|.*\\$\\{?[A-Z_])" }
+            }
+        }
+    },
+    "definitions": {
+        "text": { "type": "string", "pattern": "\\S" },
+        "login": {
+            "description": "How this side signs in. Leaving it out means none.",
+            "default": "none",
+            "oneOf": [
+                { "description": "none: no sign-in. manual: a visible browser opens /login and a person signs in once.", "enum": ["none", "manual"] },
+                {
+                    "type": "object",
+                    "required": ["manual"],
+                    "additionalProperties": false,
+                    "properties": { "manual": { "$ref": "#/definitions/text", "description": "The sign-in page a person signs in on, in a visible browser. The session is kept until it expires or LOGIN=1." } }
+                },
+                {
+                    "type": "object",
+                    "required": ["command"],
+                    "additionalProperties": false,
+                    "properties": { "command": { "$ref": "#/definitions/text", "description": "Shell command printing a Playwright storageState JSON: {\"cookies\": [...], \"origins\": []}." } }
+                },
+                {
+                    "type": "object",
+                    "required": ["form"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "form": {
+                            "type": "object",
+                            "required": ["url", "fields"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "url": { "$ref": "#/definitions/text", "description": "The sign-in page." },
+                                "fields": {
+                                    "description": "Field to value. A key is a CSS selector, else a name attribute, else the label's text. Use $NAME for secrets.",
+                                    "type": "object",
+                                    "minProperties": 1,
+                                    "additionalProperties": { "$ref": "#/definitions/text" }
+                                },
+                                "submit": { "$ref": "#/definitions/text", "description": "CSS selector of the submit control. Default: the first submit button." },
+                                "totp": {
+                                    "description": "Filled in when the app asks for a one-time code.",
+                                    "type": "object",
+                                    "required": ["field", "secret"],
+                                    "additionalProperties": false,
+                                    "properties": { "field": { "$ref": "#/definitions/text" }, "secret": { "$ref": "#/definitions/text", "description": "The base32 secret. Use $NAME." } }
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        "screen": {
+            "description": "A page by `path`, or by `from` + `link`: the first link on the `from` page whose path matches.",
+            "type": "object",
+            "required": ["name"],
+            "anyOf": [{ "required": ["path"] }, { "required": ["from", "link"] }],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "$ref": "#/definitions/text" },
+                "path": { "$ref": "#/definitions/text", "description": "A path on the side's baseUrl, or a full URL." },
+                "from": { "$ref": "#/definitions/text", "description": "The page holding the link." },
+                "link": { "$ref": "#/definitions/text", "description": "Regular expression (case-insensitive) tested against each link's path." },
+                "suffix": { "$ref": "#/definitions/text", "description": "Added to the matched link's path, e.g. /edit." },
+                "purpose": { "$ref": "#/definitions/text", "description": "What the screen is for; the five-second test needs it." }
+            }
+        },
+        "task": {
+            "type": "object",
+            "required": ["name", "from", "goal", "done", "notDone", "optimal"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "$ref": "#/definitions/text" },
+                "from": { "$ref": "#/definitions/text", "description": "Where the person starts." },
+                "goal": { "$ref": "#/definitions/text", "description": "What the person is trying to do." },
+                "done": { "$ref": "#/definitions/text", "description": "The screen that means the goal is reached." },
+                "notDone": { "$ref": "#/definitions/text", "description": "What the screen shows when it isn't." },
+                "optimal": { "description": "The fewest clicks that reach the goal.", "type": "integer", "minimum": 1 },
+                "text": { "$ref": "#/definitions/text", "description": "What the person would type into a search field on the way." }
+            }
+        }
+    }
+}

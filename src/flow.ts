@@ -63,8 +63,8 @@ export class T {
         return page;
     }
 
-    /** Throws `msg` unless `cond` holds. */
-    expect(cond: unknown, msg: string): asserts cond {
+    /** Throws `msg` unless `cond` holds. (Not an `asserts` signature: TypeScript refuses those on the untyped `t` of `run: async (t) => …`.) */
+    expect(cond: unknown, msg: string): void {
         if (!cond) throw new Error(msg);
     }
 
@@ -183,7 +183,11 @@ export async function loadFlows(cfg: Config): Promise<Loaded[]> {
         for (const file of files) {
             if (seen.has(file)) continue; // matched by an earlier glob too
             seen.add(file);
-            const f = (await import(pathToFileURL(resolve(cfg.root, file)).href)).default as Flow | undefined;
+            // Node reads a .ts or .js file as CommonJS when the nearest package.json says so, and then `export` is a syntax error.
+            const mod = await import(pathToFileURL(resolve(cfg.root, file)).href).catch((e: Error) => {
+                throw new Error(`${file}: ${e.message}${e instanceof SyntaxError ? ' (if the nearest package.json has "type": "commonjs", name flow files .mts or .mjs)' : ''}`);
+            });
+            const f = mod.default as Flow | undefined;
             if (!f || typeof f.name !== 'string' || !f.name.trim() || typeof f.run !== 'function') throw new Error(`${file}: a flow file needs \`export default { name, side?, run: async (t) => {…} }\`.`);
             const side = f.side ?? cfg.sides[0].name;
             if (!cfg.sides.some((s) => s.name === side)) throw new Error(`${file}: side "${side}" isn't in sides (${cfg.sides.map((s) => s.name).join(', ')}).`);

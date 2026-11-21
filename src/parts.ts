@@ -48,7 +48,9 @@ const untracked = (cwd: string) => git(cwd, 'ls-files', '--others', '--exclude-s
 
 /** The code as it is now (uncommitted work included), or null when this isn't a git repository with a commit. */
 export function snapshot(cwd = process.cwd()): Snap | null {
-    try { return { snapshot: git(cwd, 'stash', 'create') || git(cwd, 'rev-parse', 'HEAD'), untracked: untracked(cwd) }; } catch { return null; }
+    // `stash create` writes a commit, which git refuses without an author; a container or a CI runner has none set.
+    const stash = ['-c', 'user.name=tapcheck', '-c', 'user.email=tapcheck@example.invalid', 'stash', 'create'];
+    try { return { snapshot: git(cwd, ...stash) || git(cwd, 'rev-parse', 'HEAD'), untracked: untracked(cwd) }; } catch { return null; }
 }
 
 /** Tracked files changed since the snapshot, as paths from the git root; null when the snapshot is gone (garbage-collected). */

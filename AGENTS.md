@@ -13,8 +13,10 @@ them without plugin support:
 - `skills/tapcheck-fix/SKILL.md`: fix failing findings in the app's code and rerun until they pass.
 
 Run the CLI with `bin/tapcheck` from the folder that holds the project's `tapcheck.yml` (Node.js 23.6 or newer; the
-first run installs its dependencies). The config schema is `src/config.ts`; the run options are at the top of
-`src/cli.ts`.
+first run installs its dependencies). Without a checkout, `npx tapcheck@<version>` is the same CLI from npm once it
+is published (Node.js 22.18 or newer, after `npx playwright install chromium`). Every `tapcheck.yml` key is in
+`skills/tapcheck-setup/references/CONFIG.md` and, as JSON Schema, in `schema/tapcheck.schema.json`; the code that
+checks them is `src/config.ts`; the run options are at the top of `src/cli.ts`.
 
-Working on tapcheck itself: `npm test` runs the tests, `scripts/check-public.sh` must pass before a push, and every
-`.md` filename is in capitals.
+Working on tapcheck itself: `npm run typecheck` and `npm test` must pass, `scripts/check-public.sh` must exit 0 before
+a push, and every `.md` filename is in capitals. `CONTRIBUTING.md` has the rest.

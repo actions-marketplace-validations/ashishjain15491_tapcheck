@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schema/tapcheck.schema.json
 # A static site with no sign-in. Run from this folder:  node ../../src/cli.ts
 baseUrl: http://127.0.0.1:8765
 app:

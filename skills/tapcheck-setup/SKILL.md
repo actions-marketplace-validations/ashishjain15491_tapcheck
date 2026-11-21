@@ -20,6 +20,11 @@ until the run goes through. Findings about the app are the result, not something
 installs its dependencies and a browser, which takes a minute). It needs Node.js 23.6 or newer. Options are
 environment variables in front of it: `LIST=1 TAPCHECK`.
 
+Prefer that launcher: it is the version these instructions were written for. Only when the plugin folder has no
+`bin/tapcheck` (the skill was copied on its own) use the npm package instead, once it is published:
+`npx tapcheck@<version>`, with the `version` in the plugin's `.claude-plugin/plugin.json`, after
+`npx playwright install chromium` (Node.js 22.18 or newer).
+
 Always run it from the folder that holds `tapcheck.yml`: output (`.tapcheck/`), `.env` and `app.start` all resolve
 from the current folder.
 
@@ -74,9 +79,11 @@ user only what the code can't tell you (who the audience is, which test user to 
 
 ### 3. Write `tapcheck.yml`
 
-Start from this and delete what doesn't apply. Only `baseUrl` is required.
+Start from this and delete what doesn't apply. Only `baseUrl` is required. The first line lets the user's editor
+check the file against tapcheck's JSON Schema; keep it.
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ashishjain15491/tapcheck/main/schema/tapcheck.schema.json
 baseUrl: http://127.0.0.1:8000
 app:
   start: <from the recipe>          # skipped when the app already answers; stopped after the run
