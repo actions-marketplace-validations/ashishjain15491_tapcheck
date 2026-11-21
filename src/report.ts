@@ -22,7 +22,7 @@ export function write(dir: string, meta: { base: string; started: number; note?:
     const bySuite = [...new Set(findings.map(key))].map((s) => {
         const f = findings.filter((x) => key(x) === s);
         const n = (st: Finding['status']) => f.filter((x) => x.status === st).length;
-        return { s, pass: n('pass'), fail: n('fail'), warn: n('warn'), total: f.length };
+        return { s, pass: n('pass'), fail: n('fail'), warn: n('warn'), total: f.length, skipped: f.every((x) => x.status === 'info' && x.check === 'part ran') };
     });
     const sorted = [...findings].sort((a, b) => ORDER[a.status] - ORDER[b.status] || key(a).localeCompare(key(b)) || a.where.localeCompare(b.where));
     const mins = ((Date.now() - meta.started) / 60000).toFixed(1);
@@ -50,7 +50,7 @@ td img{max-width:120px;max-height:80px;border:1px solid var(--line);border-radiu
 .tag{font-size:11px;font-weight:700;text-transform:uppercase;padding:2px 6px;border-radius:4px;border:1px solid currentColor}.tag.fail{color:var(--fail)}.tag.warn{color:var(--warn)}.tag.pass{color:var(--pass)}.tag.info{color:var(--info)}
 body:has(#hp:not(:checked)) tr.pass{display:none}body:has(#hw:not(:checked)) tr.warn{display:none}body:has(#hi:not(:checked)) tr.info{display:none}
 </style></head><body><main><h1>tapcheck report</h1><p class="meta">${esc(meta.base)} · ${when} · ${mins} min${meta.note ? ` · ${esc(meta.note)}` : ''}</p>
-<div class="cards">${bySuite.map((b) => `<div class="card"><b>${esc(b.s)}</b><span class="n ${b.fail ? 'f' : 'p'}">${b.fail ? `${b.fail} failing` : 'clean'}</span><br><span><span class="w">${b.warn} warn</span> · <span class="p">${b.pass} pass</span> · ${b.total} checks</span></div>`).join('')}</div>
+<div class="cards">${bySuite.map((b) => `<div class="card"><b>${esc(b.s)}</b><span class="n ${b.fail ? 'f' : b.skipped ? 'w' : 'p'}">${b.fail ? `${b.fail} failing` : b.skipped ? 'skipped' : 'clean'}</span><br><span><span class="w">${b.warn} warn</span> · <span class="p">${b.pass} pass</span> · ${b.total} checks</span></div>`).join('')}</div>
 <div class="filters"><label><input type="checkbox" id="hw" checked> warnings</label><label><input type="checkbox" id="hi" checked> info</label><label><input type="checkbox" id="hp"> passes</label></div>
 <div class="wrap"><table><thead><tr><th>Status</th><th>Suite</th><th>Where</th><th>Check</th><th>Detail and evidence</th></tr></thead><tbody>${sorted.map(row).join('')}</tbody></table></div>${recorded}
 <p class="meta">Raw evidence: findings.json, payloads.json (every Jev request), code.json (the gates' output), and per side crawl.json, network.json, missed-routes.json, axe.json, interact.json, audit.json, clickstream.json and hits.json (what each part reached, for COVERAGE=1).</p></main></body></html>`;
@@ -60,6 +60,7 @@ body:has(#hp:not(:checked)) tr.pass{display:none}body:has(#hw:not(:checked)) tr.
     const md = [`# tapcheck · ${meta.base}`, '', `${when} · ${mins} min${meta.note ? ` · ${meta.note}` : ''}`, '',
         '| Suite | Failing | Warnings | Passing |', '|---|---|---|---|', ...bySuite.map((b) => `| ${b.s} | ${b.fail} | ${b.warn} | ${b.pass} |`), '',
         '## Failing', '', ...sorted.filter((f) => f.status === 'fail').map(line), '', '## Warnings', '', ...sorted.filter((f) => f.status === 'warn').map(line), '',
+        ...(sorted.some((f) => f.check === 'part ran' && f.status === 'info') ? ['## Skipped', '', ...sorted.filter((f) => f.check === 'part ran' && f.status === 'info').map(line), ''] : []),
         ...(recs.length ? ['## Recordings', '', ...recs.map((r) => `- ${r.side} · ${r.label}: ${[...r.videos.map(rel), ...(r.trace ? [`\`npx playwright show-trace ${r.trace}\``] : [])].join(' · ')}`), ''] : [])].join('\n');
     writeFileSync(`${dir}/REPORT.md`, md);
     return { bySuite, fails: findings.filter((f) => f.status === 'fail').length };

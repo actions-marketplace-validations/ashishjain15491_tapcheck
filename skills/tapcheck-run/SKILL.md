@@ -70,8 +70,10 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 `ux` and `usability` ask Jev (a paid API), as does `audit` for its look at each screen, menu and dialog; they need `TYPESAFE_API_KEY` in the environment or in `.env` next to
 `tapcheck.yml`. Never ask for the key in chat and never read `.env`; without a key those parts (and `audit`'s
 looks) are skipped and the rest runs. A run stops asking Jev once it has spent its budget: `jev.budget` in `tapcheck.yml`, default 1 USD.
-`JEV_BUDGET=0.25 TAPCHECK` sets it for one run. When the budget is reached the remaining Jev parts are skipped and
-marked so; mention it and the `JEV_BUDGET` that would let them finish.
+`JEV_BUDGET=0.25 TAPCHECK` sets it for one run. When the budget is reached, the part that hit it fails ("suite ran to
+the end"), the remaining Jev parts are listed under Skipped in the report, and the run exits 1 even if nothing else
+failed. Say that the failure is the budget, not the app, and give the `JEV_BUDGET` that would let them finish. A run
+can go over the budget by one request's cost.
 
 ## 2. Run
 

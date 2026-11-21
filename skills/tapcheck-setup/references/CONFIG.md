@@ -71,7 +71,8 @@ viewports:                          # default: these two. a11y and ux run on eac
 out: .tapcheck                      # where runs, sessions and state go (default .tapcheck); git-ignore it
 
 jev:
-  budget: 1                         # most USD one run may spend on Jev (default 1); JEV_BUDGET overrides it
+  budget: 1                         # most USD one run may spend on Jev (default 1; checked before each request, so a run
+                                    # can go over by one request); JEV_BUDGET overrides it. Reaching it exits 1.
   headers: {}                       # extra headers sent with every Jev request
 
 i18n:

@@ -140,7 +140,9 @@ export class SessionExpired extends Error {}
 export function guard(r: Run, requested: string, landed: string) {
     if ('none' in r.side.login) return;
     if (r.cfg.loginPaths.test(new URL(landed).pathname) && !r.cfg.loginPaths.test(requested.split('?')[0])) {
-        throw new SessionExpired(`Sent to sign in at ${landed}: the ${r.side.name} session has expired (run again with LOGIN=1).`);
+        // LOGIN=1 only does something on a manual side; form and command sides sign in afresh on every run.
+        const hint = 'manual' in r.side.login ? 'run again with LOGIN=1' : 'it ended during the run, or this user may not open that page';
+        throw new SessionExpired(`Sent to sign in at ${landed}: the ${r.side.name} session has expired (${hint}).`);
     }
 }
 

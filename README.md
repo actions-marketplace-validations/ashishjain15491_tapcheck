@@ -206,7 +206,10 @@ or dialog it opens. Put `TYPESAFE_API_KEY` in the environment, or in a `.env` fi
 (git-ignored). `JEV=off`, or no key, skips both suites and `audit`'s looks (its measured checks still run).
 
 - **Budget:** a run stops asking once it has spent `jev.budget` US dollars (default 1); `JEV_BUDGET=0.25` sets it
-  for one run. The parts left over are marked skipped, and the spend is printed at the end.
+  for one run. The part that reaches it stops with a failing "suite ran to the end" finding, the Jev parts after it
+  are listed as skipped in the report, and the run exits 1, since not every check ran; the measured parts still run.
+  The budget is checked before each request, so a run can go over it by the cost of one request. The spend is
+  printed at the end.
 - **What goes to TypeSafe:** screenshots of the screens and task steps you configured and of the menus and dialogs
   `audit` opens on them, and with them the text of the
   questions: the screen's name and `purpose`, your `audience`, each task's `goal`, `done` and `notDone`, and the

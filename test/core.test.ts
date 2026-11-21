@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { check, expand, isLocal } from '../src/config.ts';
 import { totp } from '../src/auth.ts';
+import { guard, SessionExpired, type Run } from '../src/browser.ts';
 import { endpoint, shape } from '../src/suites/contract.ts';
 import { leaksIn } from '../src/suites/security.ts';
 import { findings, record, write } from '../src/report.ts';
@@ -88,11 +89,24 @@ test('report: failures first, counts per suite, REPORT.md', () => {
     record({ suite: 'crawl', side: 'public', where: '/', check: 'page answers', status: 'pass' });
     record({ suite: 'crawl', side: 'public', where: '/x', check: 'page answers', status: 'fail', detail: '500' });
     record({ suite: 'a11y', side: 'public', where: 'Home', check: 'axe', status: 'warn' });
+    record({ suite: 'ux', side: 'public', where: 'ux-public', check: 'part ran', status: 'info', detail: 'skipped (JEV=off).' });
     const { bySuite, fails } = write(dir, { base: 'http://localhost', started: Date.now() });
     assert.equal(fails, 1);
-    assert.deepEqual(bySuite.find((b) => b.s === 'crawl'), { s: 'crawl', pass: 1, fail: 1, warn: 0, total: 2 });
+    assert.deepEqual(bySuite.find((b) => b.s === 'crawl'), { s: 'crawl', pass: 1, fail: 1, warn: 0, total: 2, skipped: false });
+    assert.equal(bySuite.find((b) => b.s === 'ux')?.skipped, true);
     const md = readFileSync(`${dir}/REPORT.md`, 'utf8');
     assert.match(md, /## Failing\n\n- \*\*crawl\*\* · \/x · page answers: 500/);
+    assert.match(md, /## Skipped\n\n- \*\*ux\*\* · ux-public · part ran: skipped \(JEV=off\)\./);
     const html = readFileSync(`${dir}/report.html`, 'utf8');
     assert.ok(html.indexOf('tag fail') < html.indexOf('tag pass'));
+    assert.match(html, /<b>ux<\/b><span class="n w">skipped<\/span>/);
+});
+
+test('session guard: LOGIN=1 is suggested on a manual side only', () => {
+    const run = (login: unknown) => ({ cfg: check({ baseUrl: 'http://127.0.0.1:1' }), side: { name: 'staff', login } }) as unknown as Run;
+    const landed = 'http://127.0.0.1:1/login';
+    assert.throws(() => guard(run({ manual: '/login' }), '/orders', landed), (e) => e instanceof SessionExpired && /run again with LOGIN=1/.test(e.message));
+    assert.throws(() => guard(run({ form: {} }), '/orders', landed), (e) => e instanceof SessionExpired && !/LOGIN=1/.test(e.message));
+    guard(run({ form: {} }), '/login', landed); // asked for the sign-in page itself: not an expiry
+    guard(run({ none: true }), '/orders', landed); // a side that doesn't sign in
 });

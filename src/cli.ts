@@ -135,10 +135,6 @@ jev.setup(cfg.jev);
 let jevOff = jev.whyOff();
 const jevParts = chosen.filter((p) => p.tags.includes('jev'));
 const jevAsked = !jevOff && jevParts.length > 0;
-if (jevOff && jevParts.length) {
-    record({ suite: 'jev', side: jevParts[0].side, where: jevParts.map((p) => p.name).join(', '), check: 'Jev suites ran', status: 'info',
-        detail: `skipped (${jevOff}). To run them, set TYPESAFE_API_KEY in the environment or in .env here, without JEV=off.` });
-}
 const ran: typeof chosen = []; // parts that ran, to the end or not
 const skipped: Record<string, string> = {}; // Jev parts left out, and why: neither passed nor failed
 const notRun: Record<string, string> = {}; // parts that couldn't run, and why: they count as failed
@@ -234,6 +230,16 @@ try {
     const asked = jevAsked || u.calls + u.cached > 0; // audit asks Jev too, and isn't a Jev part
     const note = asked ? `Jev: ${u.calls} calls (avg ${u.avgMs} ms, ${u.cached} from cache), ${u.tokens} input tokens, $${u.usd} of the $${u.budget} budget` : undefined;
     if (asked) jev.savePayloads(dir);
+    // Every part that didn't run gets a finding of its own, so the report (not just this terminal) says which and why.
+    // Skipped Jev parts are neither passed nor failed (info); a part that couldn't run counts as failed.
+    for (const p of chosen) {
+        if (ran.includes(p)) continue;
+        const skip = skipped[p.name];
+        const hint = skip && !/budget/.test(skip) ? ' To run it, set TYPESAFE_API_KEY in the environment or in .env here, without JEV=off.'
+            : skip ? ' Raise JEV_BUDGET (or jev.budget) to let it finish.' : '';
+        record({ suite: findingSuite(p), side: p.side, where: p.name, check: 'part ran', status: skip ? 'info' : 'fail',
+            detail: `${skip ? `skipped (${skip})` : `not run (${notRun[p.name] ?? 'the run stopped before it'})`}.${hint}` });
+    }
     const { bySuite, fails } = write(dir, { base: cfg.baseUrl, started, note, recordings });
     console.log('');
     console.table(bySuite.map((b) => ({ suite: b.s, failing: b.fail, warnings: b.warn, passing: b.pass })));
