@@ -1,0 +1,25 @@
+#!/bin/sh
+# tapcheck from a checkout or an installed plugin: installs its own dependencies on first use, then runs src/cli.ts
+# from the caller's folder (where tapcheck.yml is). Arguments and the environment (ONLY, SKIP, JEV…) pass through.
+set -e
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+root=$(cd "$(dirname "$self")/.." && pwd -P)
+
+command -v node >/dev/null 2>&1 || { echo "tapcheck needs Node.js 23.6 or newer; no node on PATH." >&2; exit 1; }
+node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 23 || (a === 23 && b >= 6) ? 0 : 1)' || {
+    echo "tapcheck needs Node.js 23.6 or newer (it runs TypeScript directly); this is $(node -v)." >&2; exit 1; }
+
+# Setup output goes to stderr, so stdout stays what the CLI prints.
+if [ ! -d "$root/node_modules" ]; then
+    echo "tapcheck: first run, installing dependencies in $root" >&2
+    (cd "$root" && npm ci --omit=dev --no-audit --no-fund) >&2
+fi
+if ! (cd "$root" && node -e 'process.exit(require("node:fs").existsSync(require("playwright").chromium.executablePath()) ? 0 : 1)') 2>/dev/null; then
+    echo "tapcheck: installing Playwright's Chromium" >&2
+    (cd "$root" && npx playwright install chromium) >&2
+fi
+exec node "$root/src/cli.ts" "$@"

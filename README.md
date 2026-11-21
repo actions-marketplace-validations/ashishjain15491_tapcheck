@@ -7,6 +7,24 @@ skills set it up for your project.
 
 Status: under construction, not usable yet.
 
+## As a plugin for Claude Code and Codex
+
+The repository is a plugin for both, with one shared `skills/` folder:
+
+```
+/plugin install tapcheck --marketplace ashishjain15491/tapcheck     # Claude Code
+codex plugin marketplace add ashishjain15491/tapcheck && codex plugin add tapcheck@tapcheck     # Codex
+```
+
+- **tapcheck-setup** detects your stack (Laravel, Django, Rails, Express, Next.js, Go, static sites; anything else by
+  the same pattern), writes `tapcheck.yml` and gets a first run through. "Set up tapcheck for this app."
+- **tapcheck-run** picks the parts to run, runs them and reports the findings. "Run tapcheck on what I changed."
+- **tapcheck-fix** fixes failing findings in your code and reruns each part until it passes, without loosening any
+  check. "Fix the tapcheck failures."
+
+Any other agent can follow the same files: see `AGENTS.md`. `bin/tapcheck` runs the CLI from a checkout (Node.js 23.6
+or newer); the first run installs its dependencies and Playwright's Chromium.
+
 ## Beyond the built-in suites
 
 Four optional keys in `tapcheck.yml` bring in what only your project knows. Paths and commands are relative to the

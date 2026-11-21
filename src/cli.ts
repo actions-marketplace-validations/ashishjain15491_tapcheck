@@ -47,6 +47,15 @@ import * as a11y from './suites/a11y.ts';
 import * as ux from './suites/ux.ts';
 import * as usability from './suites/usability.ts';
 
+// A config or usage error reads better as one line than a stack trace (agents parse this output too).
+// TAPCHECK_DEBUG=1 keeps the stack for real bugs.
+if (process.env.TAPCHECK_DEBUG !== '1') {
+    process.setUncaughtExceptionCaptureCallback((e) => {
+        console.error(`tapcheck: ${(e as Error)?.message ?? e}`);
+        process.exit(2);
+    });
+}
+
 const RUN: Record<(typeof SUITES)[number], (r: Run) => Promise<void>> = { crawl: crawl.run, contract: contract.run, security: security.run, a11y: a11y.run, ux: ux.run, usability: usability.run };
 
 async function answers(url: string) {

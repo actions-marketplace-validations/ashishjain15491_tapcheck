@@ -18,7 +18,7 @@
     },
     "types": "src/flow.ts",
     "bin": {
-        "tapcheck": "src/cli.ts"
+        "tapcheck": "bin/tapcheck"
     },
     "engines": {
         "node": ">=23.6"
