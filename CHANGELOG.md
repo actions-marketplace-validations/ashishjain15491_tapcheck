@@ -6,7 +6,9 @@ The first version. Not yet published to npm.
 
 - **Core harness.** One `tapcheck.yml` describes the app: how to start, stop and reset it, its sides and how each
   signs in (`none`, `manual`, `form` with optional TOTP, `command`), screens, tasks and viewports. `$NAME` values come
-  from the environment. One run writes `report.html`, `REPORT.md`, `findings.json` and the evidence.
+  from the environment. One run writes `report.html`, `REPORT.md`, `findings.json` and the evidence. Parts that were
+  skipped or couldn't run (no Jev key, budget reached, sign-in failed, session expired) get a "part ran" finding each,
+  so the report says which and why.
 - **Measured suites.** `crawl` (page status, load time, console errors, broken images and links, unlabelled fields),
   `contract` (API status, JSON that parses, latency, response shape against a saved baseline), `security` (headers,
   cookie flags, pages that need sign-in, CSRF, served secrets, third-party requests) and `a11y` (axe-core WCAG 2.2
