@@ -58,6 +58,7 @@ export type Config = {
     coverage: { file: string; reasons: { match: RegExp; why: string }[] };
     flows: string[]; // globs of flow files (src/flow.ts)
     mail: { mailpit?: string }; // Mailpit's web address, for t.mail in flows
+    browser: { args: string[] }; // extra command-line switches for the run's Chromium
 };
 
 const DEFAULT_SKIP = '/(logout|log-out|sign-?out|delete|destroy|remove|export|download|impersonat|unsubscribe)|\\.(csv|pdf|zip|png|jpe?g|gif|svg|webp|ico|xlsx?)$';
@@ -310,7 +311,11 @@ export function check(raw: any, root = process.cwd()): Config {
     flows.forEach((g: unknown, i: number) => str(g, Array.isArray(raw.flows) ? `flows[${i}]` : 'flows'));
     if (raw.mail !== undefined && (!raw.mail || typeof raw.mail !== 'object')) fail('mail', 'must be {mailpit: <the address of Mailpit\'s web page>}');
 
-    return { root, baseUrl, app, sides, changes, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows,
+    const args = raw.browser?.args ?? [];
+    if ((raw.browser !== undefined && (!raw.browser || typeof raw.browser !== 'object' || Array.isArray(raw.browser))) || !Array.isArray(args) || args.some((a: unknown) => typeof a !== 'string' || !a.startsWith('--')))
+        fail('browser', 'must be {args: ["--a-chromium-switch", …]}');
+
+    return { root, baseUrl, app, sides, changes, browser: { args }, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows,
         mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
         crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, interact: { max: interactMax, submit: it.submit === true },

@@ -261,6 +261,13 @@
             "properties": {
                 "mailpit": { "description": "The address of Mailpit's web page, for t.mail in flows.", "type": "string", "pattern": "^(https?://[^/]+|.*\\$\\{?[A-Z_])" }
             }
+        },
+        "browser": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "args": { "description": "Extra command-line switches for the run's Chromium, e.g. --disable-features=LocalNetworkAccessChecks for an app on localhost whose sandboxed frames load its own files.", "type": "array", "items": { "type": "string", "pattern": "^--" }, "default": [] }
+            }
         }
     },
     "definitions": {

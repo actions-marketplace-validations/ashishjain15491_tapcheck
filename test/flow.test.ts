@@ -26,7 +26,8 @@ test('flows: loaded from globs, run end to end with passing and failing steps, t
         const u = new URL(req.url!, 'http://x');
         if (!u.pathname.startsWith('/api/v1/')) { res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE); return; }
         asked.push(`${req.method} ${u.pathname}${u.search}`);
-        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(u.pathname.endsWith('/search') ? { messages: asked.length > 1 ? [MAIL] : [] } : MAIL));
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(u.pathname.endsWith('/search') ? { messages: asked.length > 1 ? [MAIL] : [], messages_count: 3 }
+            : u.pathname.endsWith('/headers') ? { 'List-Unsubscribe': ['<mailto:off@shop.test>'] } : MAIL));
     });
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
     const stub = await start({ port: 0, rules: [{ host: 'rates.example.com', path: '/v1/*', status: 200, json: { eur: 0.9 }, headers: { 'access-control-allow-origin': '*' }, delayMs: 0 }] }, tmp);
@@ -62,8 +63,13 @@ export default {
             const mail = await t.mail.waitFor({ to: 'ada@example.com', subject: 'Confirm' });
             t.expect(mail.subject === 'Confirm your address' && mail.from === 'shop@example.com' && mail.to[0] === 'ada@example.com' && mail.text === 'Confirm', JSON.stringify(mail));
             t.expect(mail.links.length === 1 && mail.links[0] === 'http://shop.test/confirm?a=1&b=2', 'links: ' + mail.links);
+            t.expect(mail.id === 'm1' && mail.headers['List-Unsubscribe'][0] === '<mailto:off@shop.test>', 'id and headers: ' + JSON.stringify([mail.id, mail.headers]));
+            t.expect((await t.mail.count({ to: 'ada@example.com' })) === 3, 'count');
+            const all = await t.mail.all({ subject: 'Confirm' });
+            t.expect(all.length === 1 && all[0].id === 'm1', 'all: ' + all.length);
             await t.mail.clear();
         });
+        await t.step('it works, with a caveat', async () => ({ warn: 'no way to undo it on screen' }));
         await t.step('signed out is its own page', async () => { t.expect((await t.page({ auth: false })) !== page, 'the same page came back'); });
         t.note('slow answer', 'took 3 s');
         t.note('refunds', 'skipped: billing is off', 'info');
@@ -84,6 +90,7 @@ export default {
         ['flow-ask-a-question', 'Ask a question', 'saving shows a confirmation', 'fail'],
         ['flow-ask-a-question', 'Ask a question', 'outside requests go to the stub', 'pass'], // it carried on after the failed step
         ['flow-ask-a-question', 'Ask a question', 'the confirmation email arrives', 'pass'],
+        ['flow-ask-a-question', 'Ask a question', 'it works, with a caveat', 'warn'],
         ['flow-ask-a-question', 'Ask a question', 'signed out is its own page', 'pass'],
         ['flow-ask-a-question', 'Ask a question', 'slow answer', 'warn'],
         ['flow-ask-a-question', 'Ask a question', 'refunds', 'info'],
@@ -92,8 +99,11 @@ export default {
     assert.equal(found[1].detail, 'no "Saved" message after Save · console: save failed: no handler');
     assert.deepEqual(found[1].evidence, [`${tmp}/shots/flow-ask-a-question-saving_shows_a_confirmation.png`]);
     assert.ok(existsSync(found[1].evidence![0]));
-    assert.deepEqual(asked, ['GET /api/v1/search?query=to%3A%22ada%40example.com%22%20subject%3A%22Confirm%22', 'GET /api/v1/search?query=to%3A%22ada%40example.com%22%20subject%3A%22Confirm%22',
-        'GET /api/v1/message/m1', 'DELETE /api/v1/messages']); // it waited for the mail to arrive
+    assert.equal(found.find((f) => f.status === 'warn')!.detail, 'no way to undo it on screen');
+    const q = 'query=to%3A%22ada%40example.com%22%20subject%3A%22Confirm%22';
+    assert.deepEqual(asked, [`GET /api/v1/search?limit=1&${q}`, `GET /api/v1/search?limit=1&${q}`, 'GET /api/v1/message/m1', 'GET /api/v1/message/m1/headers', // it waited for the mail to arrive
+        'GET /api/v1/search?limit=1&query=to%3A%22ada%40example.com%22', 'GET /api/v1/search?limit=500&query=subject%3A%22Confirm%22', 'GET /api/v1/message/m1', 'GET /api/v1/message/m1/headers',
+        'DELETE /api/v1/messages']);
 
     // Outside a step, what a flow throws is the caller's; t.stub and t.mail say which config they need.
     await assert.rejects(runFlow(flows[1], r), /This flow uses t\.stub, but tapcheck\.yml has no stub\./);
@@ -109,4 +119,15 @@ export default {
     await assert.rejects(loadFlows(check({ baseUrl: base, flows: ['ask.flow.ts', 'same.mjs'] }, tmp)), /flows: "same\.mjs" matches no file/);
     writeFileSync(`${tmp}/same.mjs`, 'export default { name: "ask A question", run: async () => {} };');
     await assert.rejects(loadFlows(check({ baseUrl: base, flows: ['ask.flow.ts', 'same.mjs'] }, tmp)), /same\.mjs: another flow is already called "ask A question" \(part flow-ask-a-question\)/);
+});
+
+test('flows: one that never settles fails at its timeout, a bad timeout is refused', async () => {
+    const dir = mkdtempSync(`${tmpdir()}/tapcheck-flow-timeout-`);
+    writeFileSync(`${dir}/hang.flow.js`, "export default { name: 'Hang', timeout: 0.2, run: () => new Promise(() => {}) };\n");
+    const cfg = check({ baseUrl: 'http://127.0.0.1:1', flows: ['hang.flow.js'] }, dir);
+    const [flow] = await loadFlows(cfg);
+    const r = { cfg, side: cfg.sides[0], dir, record: () => {}, crawl: { pages: [], hits: [], done: false } } as unknown as Run;
+    await assert.rejects(runFlow(flow, r), /didn't finish within 0.2 s/);
+    writeFileSync(`${dir}/bad.flow.js`, "export default { name: 'Bad', timeout: 'soon', run: async () => {} };\n");
+    await assert.rejects(loadFlows(check({ baseUrl: 'http://127.0.0.1:1', flows: ['bad.flow.js'] }, dir)), /timeout must be a number of seconds/);
 });

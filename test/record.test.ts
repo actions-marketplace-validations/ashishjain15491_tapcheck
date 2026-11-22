@@ -27,6 +27,7 @@ const fake: Client = { systemOne: async (req) => { asked.push(req); return { ans
 test('HEADED, SLOWMO and START_DELAY decide how the browser starts', () => {
     assert.deepEqual(launchOptions({}), { headless: true, slowMo: 0 });
     assert.deepEqual(launchOptions({ HEADED: '1', SLOWMO: '150' }), { headless: false, slowMo: 150 });
+    assert.deepEqual(launchOptions({}, ['--disable-features=LocalNetworkAccessChecks']), { headless: true, slowMo: 0, args: ['--disable-features=LocalNetworkAccessChecks'] }); // browser.args
     assert.deepEqual([startDelay({}), startDelay({ START_DELAY: '10' })], [0, 10]);
     assert.throws(() => launchOptions({ SLOWMO: 'slow' }), /SLOWMO must be a number, 0 or more \(got "slow"\)/);
     assert.throws(() => startDelay({ START_DELAY: '-1' }), /START_DELAY must be a number/);
@@ -57,7 +58,7 @@ test('RECORD=1: a context writes a video and a trace, the report links them, and
 
 test('t.jev and t.mail.judge: verdicts become findings of the flow; skipped with JEV=off', async () => {
     setup(cfg.jev, fake);
-    const t = new T(r, { name: 'Look', side: 'public', part: 'flow-look', run: async () => {} });
+    const t = new T(r, { name: 'Look', side: 'public', part: 'flow-look', timeout: 60, run: async () => {} });
     found.length = 0;
     let a: Record<string, any> | null = null;
     await t.step('open the shop', async () => { await t.goto('/b'); a = await t.jev('home'); });
@@ -81,6 +82,10 @@ test('t.jev and t.mail.judge: verdicts become findings of the flow; skipped with
         ['Look › email "Welcome"', 'jev: actions visible', 'pass'], ['Look › email "Welcome"', 'jev: mobile readable', 'pass']]);
     assert.deepEqual(found[0].evidence, [`${tmp}/shots/flow-look-email-welcome.png`, `${tmp}/shots/flow-look-email-welcome-mobile.png`]);
     assert.ok(found[0].evidence!.every((f) => existsSync(f)));
+
+    // A page that reloads itself while Jev looks at it is looked at again once it is back.
+    await (await t.page()).evaluate(() => { setTimeout(() => location.reload(), 150); });
+    assert.equal((await t.jev('reloading'))!.clipped.noul, 0.9);
 
     // JEV=off: nothing asked, one info finding each, null returned, and the flow carries on.
     process.env.JEV = 'off';

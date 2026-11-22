@@ -86,6 +86,7 @@ stub: { port: 8766, rules: […], dns: {…} }   # see below
 coverage: { file: COVERAGE.md, reasons: […] }   # for COVERAGE=1; see below
 flows: tests/tapcheck/*.ts          # a glob or a list of globs; see below
 mail: { mailpit: http://127.0.0.1:8025 }   # Mailpit's web address, for t.mail in flows
+browser: { args: ["--disable-features=LocalNetworkAccessChecks"] }   # extra switches for the run's Chromium; see below
 ```
 
 ## login
@@ -266,12 +267,23 @@ app answered a request for it with anything but 401, 403, 404 or 405.
 
 Journeys only this app has, written as TypeScript or JavaScript files (ES modules: in a project whose `package.json`
 says `"type": "commonjs"`, name them `.mts` or `.mjs`); each is its own part, `flow-<name>`. Unlike the
-suites, a flow may submit forms and change data, so it belongs with `app.reset` and `RESET=1`. The file format and
+suites, a flow may submit forms and change data, so it belongs with `app.reset` and `RESET=1`. A flow that takes longer
+than its `timeout` (seconds in the flow's export, default 3600) fails and the run goes on. The file format and
 the `t` helpers (`t.goto`, `t.page`, `t.step`, `t.expect`, `t.note`, `t.jev`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
 top of `src/flow.ts` in the tapcheck folder (`<skill base directory>/../../src/flow.ts`), with a working example in
 `examples/static-site/tests/tapcheck/` there. `await t.jev('cart with two items')` has Jev look at the current page
 (the visual questions, or your own), and `await t.mail.judge(mail)` at an email from `t.mail.waitFor`: each answer is
-a finding of the flow, and with `JEV=off` or no key both record that they were skipped and return `null`.
+a finding of the flow, and with `JEV=off` or no key both record that they were skipped and return `null`. A step
+that returns `{ warn: '…' }` is a warning rather than a pass; `t.mail.count()` and `t.mail.all()` take the same
+`{ to, subject }` filter as `waitFor`, and every message carries its `headers`.
+
+## browser.args
+
+Extra command-line switches for the run's Chromium. The usual reason: the app runs on localhost and shows its own
+files inside a sandboxed frame (an email or page preview). Such a frame has no origin, so Chrome's local network
+access check refuses its requests to localhost ("Permission was denied for this request to access the `loopback`
+address space"), which never happens on a public host. `--disable-features=LocalNetworkAccessChecks` turns that
+check off for the run. The sign-in browser of a `form` login doesn't get these switches.
 
 ## Environment variables for a run
 

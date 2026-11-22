@@ -57,7 +57,7 @@ test('schema: the example tapcheck.yml and the configs in the docs are valid', (
         stub: { port: 8766, rules: [{ host: 'api.example.com', method: 'POST', path: '/v1/charges', status: 201, json: { id: 'ch_1' }, headers: { 'x-a': 'b' }, delayMs: 200 }, { body: 'ok' }],
             dns: { port: 8767, defaultA: '203.0.113.7', records: [{ name: 'shop.example.com', type: 'MX', values: ['10 mx.example.com'] }, { name: 'shop.example.com', type: 'TXT', values: ['v=spf1 -all'] }] } },
         coverage: { file: 'docs/COVERAGE.md', reasons: [{ match: '^GET /admin/export', why: 'downloads are not followed' }] },
-        mail: { mailpit: 'http://127.0.0.1:8025' }, interact: { max: 40, submit: false }, audit: { max: 10, skip: '/(editor|canvas)(/|$)' },
+        mail: { mailpit: 'http://127.0.0.1:8025' }, browser: { args: ['--disable-features=LocalNetworkAccessChecks'] }, interact: { max: 40, submit: false }, audit: { max: 10, skip: '/(editor|canvas)(/|$)' },
         design: { colors: ['#1f2937', '#fff'], fonts: ['Inter'], radii: [0, 4, 8], spacing: [4, 8, 16] },
     };
     assert.deepEqual(errors(schema, full), []);
@@ -77,6 +77,7 @@ test('schema: what src/config.ts refuses, the schema refuses too', () => {
         ['stub.dns.port', (c) => { c.stub.dns = { port: 0 }; }], ['stub.dns.records', (c) => { c.stub.dns = { records: [{ name: 'a.test', type: 'SRV', values: ['x'] }] }; }],
         ['stub.dns.defaultA', (c) => { c.stub.dns = { defaultA: 'localhost' }; }],
         ['jev.budget', (c) => { c.jev = { budget: 0 }; }], ['viewports', (c) => { c.viewports = []; }], ['security.csrf', (c) => { c.security = { csrf: { path: '/orders' } }; }],
+        ['browser.args', (c) => { c.browser = { args: ['headless'] }; }],
     ];
     for (const [name, change] of wrong) {
         const c = example();

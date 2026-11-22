@@ -12,8 +12,9 @@
  *       },
  *   } satisfies Flow;
  *
- * Each step is one finding: pass, or fail with what was thrown, a screenshot and the page's console errors; the flow
- * carries on after a failed step; t.note(name, detail, 'warn' | 'info') records a warning or a note without a step. Unlike the suites, a flow may click anything and change data: run it against a copy
+ * Each step is one finding: pass, or fail with what was thrown, a screenshot and the page's console errors (a step that
+ * returns `{ warn: '…' }` is a warning instead); the flow
+ * carries on after a failed step, and a flow that takes longer than its `timeout` (seconds, default 3600) fails; t.note(name, detail, 'warn' | 'info') records a warning or a note without a step. Unlike the suites, a flow may click anything and change data: run it against a copy
  * you can reset. t.jev() and t.mail.judge() ask Jev to look at the current page or at an email; with JEV=off or no key
  * they record that they were skipped and return null, so a flow that calls them still runs everywhere.
  */
@@ -30,10 +31,12 @@ import type { FailRule, Reply, Seen } from './stub.ts';
 
 /** For a flow's own questions to t.jev() and t.mail.judge(). */
 export { choice, noul, score } from '@typesafe-ai/sdk';
-export type Flow = { name: string; side?: string; run: (t: T) => Promise<void> };
+/** timeout: seconds the whole flow may take (default 3600); past it the flow fails and the run goes on. */
+export type Flow = { name: string; side?: string; timeout?: number; run: (t: T) => Promise<void> };
 /** A flow as loaded: its side settled and its part name. */
 export type Loaded = Required<Flow> & { part: string };
-export type Mail = { subject: string; from: string; to: string[]; html: string; text: string; links: string[] };
+/** One message in Mailpit. headers: every header by name, as Mailpit spells it ("List-Unsubscribe"), each with its values. */
+export type Mail = { id: string; subject: string; from: string; to: string[]; html: string; text: string; links: string[]; headers: Record<string, string[]> };
 
 /** What a flow's run() is handed. */
 export class T {
@@ -74,14 +77,19 @@ export class T {
         if (!cond) throw new Error(msg);
     }
 
-    /** One finding: passes when `fn` returns (a string it returns is the detail), fails when it throws. Returns whether it passed. */
-    async step(name: string, fn: () => Promise<void | string>): Promise<boolean> {
+    /**
+     * One finding: passes when `fn` returns (a string it returns is the detail), fails when it throws; returning
+     * `{ warn }` makes it a warning with that detail (it worked, with something to look at). Returns whether it didn't fail.
+     */
+    async step(name: string, fn: () => Promise<void | string | { warn: string }>): Promise<boolean> {
         const errors = this.current && this.errors.get(this.current);
         if (errors) errors.length = 0;
         const base = { suite: this.flow.part, where: this.flow.name, check: name };
         this.r.step = name; // what the step reaches is filed under it (hits.json)
         try {
-            this.r.record({ ...base, status: 'pass', detail: (await fn()) || undefined });
+            const out = await fn();
+            if (out && typeof out === 'object') this.r.record({ ...base, status: 'warn', detail: out.warn });
+            else this.r.record({ ...base, status: 'pass', detail: out || undefined });
             return true;
         } catch (e) {
             const page = this.current, seen = (page && this.errors.get(page)) ?? [];
@@ -129,13 +137,18 @@ export class T {
      * (loaded, no error, overlap, clipping, raw keys, alignment), or your own `questions` about `screenshots` (built with
      * the TypeSafe SDK's noul, score and choice). Each answer is a finding of the flow, and an unsure one a warning. A
      * yes-or-no question of your own passes on yes; a score passes from 7 of 10 and is a warning below; any other answer is
-     * recorded as info. The answers are returned for the flow's own checks; null when Jev is off or over its budget.
+     * recorded as info. The page is looked at once it has settled. The answers are returned for the flow's own checks; null when Jev is off or over its budget.
      */
     async jev(label: string, questions: Record<string, any> = VISUAL): Promise<Record<string, any> | null> {
         if (jev.whyOff()) return this.skipped(label, jev.whyOff());
         const page = this.current ?? await this.page();
         const vh = page.viewportSize()?.height ?? 800;
-        const shots = await slices(this.r, page, `${this.flow.part}-jev-${slug(label)}`, await page.evaluate(() => document.documentElement.scrollHeight), vh);
+        const shoot = async () => {
+            await settle(page);
+            return slices(this.r, page, `${this.flow.part}-jev-${slug(label)}`, await page.evaluate(() => document.documentElement.scrollHeight), vh);
+        };
+        // A page that reloads itself while it is looked at (after a save, say) throws the look out: look again once it is back.
+        const shots = await shoot().catch((e) => { if (!/context was destroyed|navigat/i.test(String(e))) throw e; return shoot(); });
         return this.look(label, { screen: label, screenshots: shots.map(jev.img),
             note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined }, questions, shots);
     }
@@ -201,22 +214,37 @@ export class T {
     get mail() {
         const base = this.need(this.r.cfg.mail.mailpit, 'mail.mailpit');
         const call = (path: string, method?: string) => this.api(base, `/api/v1/${path}`, method);
+        type Filter = { to?: string; subject?: string };
+        const search = (f: Filter, limit: number) => {
+            const query = [f.to ? `to:"${f.to}"` : '', f.subject ? `subject:"${f.subject}"` : ''].filter(Boolean).join(' ');
+            return { query, found: call(query ? `search?limit=${limit}&query=${encodeURIComponent(query)}` : `messages?limit=${limit}`) as Promise<{ messages?: { ID: string }[]; messages_count?: number; total?: number }> };
+        };
+        const read = async (id: string): Promise<Mail> => {
+            const m = await call(`message/${id}`);
+            const html: string = m.HTML ?? '';
+            return { id, subject: m.Subject ?? '', from: m.From?.Address ?? '', to: (m.To ?? []).map((x: any) => x.Address), html, text: m.Text ?? '',
+                links: [...new Set([...html.matchAll(/href="([^"]+)"/g)].map((x) => x[1].replace(/&amp;/g, '&')))],
+                headers: await call(`message/${id}/headers`).catch(() => ({})) };
+        };
         return {
             /** The newest message to that address and/or with that subject (a part of it), waiting up to timeoutMs (default 30 s) for it. */
-            waitFor: async (f: { to?: string; subject?: string; timeoutMs?: number } = {}): Promise<Mail> => {
-                const query = [f.to ? `to:"${f.to}"` : '', f.subject ? `subject:"${f.subject}"` : ''].filter(Boolean).join(' ');
+            waitFor: async (f: Filter & { timeoutMs?: number } = {}): Promise<Mail> => {
                 const until = Date.now() + (f.timeoutMs ?? 30_000);
                 for (;;) {
-                    const hit = (await call(query ? `search?query=${encodeURIComponent(query)}` : 'messages?limit=1')).messages?.[0];
-                    if (hit) {
-                        const m = await call(`message/${hit.ID}`);
-                        const html: string = m.HTML ?? '';
-                        return { subject: m.Subject ?? '', from: m.From?.Address ?? '', to: (m.To ?? []).map((x: any) => x.Address), html, text: m.Text ?? '',
-                            links: [...new Set([...html.matchAll(/href="([^"]+)"/g)].map((x) => x[1].replace(/&amp;/g, '&')))] };
-                    }
+                    const { query, found } = search(f, 1);
+                    const hit = (await found).messages?.[0];
+                    if (hit) return read(hit.ID);
                     if (Date.now() > until) throw new Error(`No email${query ? ` matching ${query}` : ''} arrived in Mailpit within ${(f.timeoutMs ?? 30_000) / 1000} s.`);
                     await new Promise((done) => setTimeout(done, 500));
                 }
+            },
+            /** How many messages are to that address and/or have that subject (a part of either); all of them without a filter. */
+            count: async (f: Filter = {}): Promise<number> => { const a = await search(f, 1).found; return a.messages_count ?? a.total ?? 0; },
+            /** Every such message, newest first (at most 500), each read in full. */
+            all: async (f: Filter = {}): Promise<Mail[]> => {
+                const out: Mail[] = [];
+                for (const m of (await search(f, 500).found).messages ?? []) out.push(await read(m.ID));
+                return out;
             },
             /**
              * Jev's look at an email: its HTML drawn in a page (scripts off) at a computer's and at a phone's width, then asked
@@ -273,9 +301,10 @@ export async function loadFlows(cfg: Config): Promise<Loaded[]> {
             if (!f || typeof f.name !== 'string' || !f.name.trim() || typeof f.run !== 'function') throw new Error(`${file}: a flow file needs \`export default { name, side?, run: async (t) => {…} }\`.`);
             const side = f.side ?? cfg.sides[0].name;
             if (!cfg.sides.some((s) => s.name === side)) throw new Error(`${file}: side "${side}" isn't in sides (${cfg.sides.map((s) => s.name).join(', ')}).`);
+            if (f.timeout !== undefined && !(Number.isFinite(f.timeout) && f.timeout > 0)) throw new Error(`${file}: timeout must be a number of seconds above 0.`);
             const part = `flow-${slug(f.name).replace(/_/g, '-')}`;
             if (out.some((o) => o.part === part)) throw new Error(`${file}: another flow is already called "${f.name}" (part ${part}).`);
-            out.push({ name: f.name, side, run: f.run, part });
+            out.push({ name: f.name, side, timeout: f.timeout ?? 3600, run: f.run, part });
         }
     }
     return out;
@@ -284,5 +313,8 @@ export async function loadFlows(cfg: Config): Promise<Loaded[]> {
 /** Runs one flow on its side; whatever it throws outside a step is the caller's to record. */
 export async function runFlow(flow: Loaded, r: Run, stubUrl?: string) {
     const t = new T(r, flow, stubUrl);
-    try { await flow.run(t); } finally { await t.close(); }
+    let timer: NodeJS.Timeout | undefined;
+    // A flow stuck on a promise that never settles would otherwise hold up every part after it.
+    const limit = new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error(`the flow didn't finish within ${flow.timeout} s (raise its timeout if it needs longer)`)), flow.timeout * 1000); });
+    try { await Promise.race([flow.run(t), limit]); } finally { clearTimeout(timer); await t.close(); }
 }

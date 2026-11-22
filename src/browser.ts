@@ -30,15 +30,16 @@ const seconds = (name: string, env: NodeJS.ProcessEnv) => {
     if (!(n >= 0)) throw new Error(`${name} must be a number, 0 or more (got "${env[name]}").`);
     return n;
 };
-/** How the run's browser starts: HEADED=1 shows it, SLOWMO=<ms> waits that long between its actions. */
-export const launchOptions = (env = process.env) => ({ headless: env.HEADED !== '1', slowMo: seconds('SLOWMO', env) });
+/** How the run's browser starts: HEADED=1 shows it, SLOWMO=<ms> waits that long between its actions; `args` are the config's browser.args. */
+export const launchOptions = (env = process.env, args: string[] = []) => ({ headless: env.HEADED !== '1', slowMo: seconds('SLOWMO', env), ...(args.length ? { args } : {}) });
 /** START_DELAY=<s>: seconds to count down before the first action (time to start a screen recording). */
 export const startDelay = (env = process.env) => seconds('START_DELAY', env);
 
 let browser: Browser | null = null;
 const live = new Set<BrowserContext>(); // recorded contexts not closed yet
-export async function launch() {
-    browser ??= await chromium.launch(launchOptions());
+/** The run's one Chromium; `args` (browser.args) count on the call that starts it. */
+export async function launch(args: string[] = []) {
+    browser ??= await chromium.launch(launchOptions(process.env, args));
     return browser;
 }
 /** Closes the browser. A recorded context a suite left open is closed first, so its video and trace are still written. */
@@ -123,16 +124,24 @@ export function watch(page: Page) {
     return errors;
 }
 
-/** Network idle, then the DOM quiet for 500 ms (at most 5 s more), so late-rendering widgets are judged as people see them. */
+/**
+ * Network idle, then the DOM quiet for 500 ms (at most 5 s more), so late-rendering widgets are judged as people see them.
+ * page.evaluate has no timeout, and a page's own timers never fire when its CSP sandboxes it without allow-scripts (an
+ * email preview, say) or its main thread never yields, so the 6 s cap is kept here, outside the page.
+ */
 export async function settle(page: Page) {
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-    await page.evaluate(() => new Promise<void>((done) => {
+    let cap: NodeJS.Timeout | undefined;
+    const outside = new Promise<void>((done) => { cap = setTimeout(done, 6000); });
+    const quiet = page.evaluate(() => new Promise<void>((done) => {
         let timer = setTimeout(finish, 500);
         const cap = setTimeout(finish, 5000);
         const obs = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(finish, 500); });
         obs.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
         function finish() { obs.disconnect(); clearTimeout(timer); clearTimeout(cap); done(); }
     })).catch(() => {});
+    await Promise.race([quiet, outside]);
+    clearTimeout(cap);
 }
 
 export class SessionExpired extends Error {}

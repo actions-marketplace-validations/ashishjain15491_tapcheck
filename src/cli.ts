@@ -163,7 +163,7 @@ mkdirSync(dir, { recursive: true });
 const needsApp = chosen.some((p) => p.side); // the code part alone needs neither the app nor a browser
 // The browser first, before anything else starts: a missing Chromium is one line here, not Playwright's long error in every part.
 if (needsApp) {
-    await launch().catch((e: Error) => {
+    await launch(cfg.browser.args).catch((e: Error) => {
         throw new Error(/Executable doesn't exist|playwright install/.test(e.message) ? "Chromium isn't installed. Run: npx playwright install chromium" : e.message);
     });
 }
@@ -205,6 +205,7 @@ try {
         try {
             r.auth = await signIn(cfg, side);
         } catch (e) {
+            console.log(`  sign-in failed, so ${parts.map(label).join(', ')} didn't run: ${(e as Error).message}`);
             r.record({ suite: 'sign-in', where: side.baseUrl, check: 'signed in', status: 'fail', detail: (e as Error).message.slice(0, 300) });
             for (const p of parts) notRun[p.name] = 'sign-in failed';
             continue;
@@ -254,4 +255,6 @@ try {
     if (recordings.length) console.log(`Recordings: ${recordings.length} (videos and traces, listed in the report). Open a trace: npx playwright show-trace <file>`);
     console.log(`Report: ${dir}/report.html`);
     process.exitCode = fails ? 1 : 0;
+    // A flow that timed out may leave its own browser or timers behind, which would keep the process alive.
+    setTimeout(() => process.exit(), 10_000).unref();
 }
