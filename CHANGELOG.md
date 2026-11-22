@@ -42,3 +42,8 @@ The first version. Not yet published to npm.
   `tapcheck.yml`; a Docker image on the official Playwright image; a GitHub Action that runs tapcheck, writes the
   job summary and uploads the run folder; CI with a type check. A missing Chromium is now one line naming the
   command that installs it, and `CHANGED=1` works where git has no author configured (containers, CI runners).
+- **Fixes from the first real project (unreleased).** The crawl follows the links it finds before the route list, and
+  only pages it actually crawled count toward `crawl.max` (a long route list used to crowd the links out). The
+  signed-out check follows redirects, so `/` → `/admin` → `/login` counts as refused. A CSRF token cookie
+  (`XSRF-TOKEN`, `csrftoken`) may be readable by script. The CSRF probe goes to the sides that sign in (every side
+  when none does), and a side can have its own `csrf`. Flows get `t.note(name, detail, 'warn' | 'info')`.

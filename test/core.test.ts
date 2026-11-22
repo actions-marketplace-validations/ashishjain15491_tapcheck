@@ -1,3 +1,4 @@
+import { cookieProblems } from '../src/suites/security.ts';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,7 +24,7 @@ test('config: defaults for a bare public site', () => {
 test('config: screens per side, login kinds, csrf', () => {
     const c = check({
         baseUrl: 'http://localhost:3000',
-        sides: { customer: { login: { form: { url: '/login', fields: { email: 'a@example.com', password: 'x' } } } }, staff: { baseUrl: 'http://admin.localhost:3000', login: 'manual' } },
+        sides: { customer: { login: { form: { url: '/login', fields: { email: 'a@example.com', password: 'x' } } } }, staff: { baseUrl: 'http://admin.localhost:3000', login: 'manual', csrf: { method: 'patch', path: '/admin/users/1', expect: 419 } } },
         screens: { customer: [{ name: 'Home', path: '/home' }], staff: [{ name: 'User', from: '/users', link: '^/users/\\d+$' }] },
         security: { csrf: { path: '/api/probe', expect: 403 } },
     });
@@ -31,6 +32,8 @@ test('config: screens per side, login kinds, csrf', () => {
     assert.deepEqual(c.sides[1].login, { manual: '/login' });
     assert.equal(c.sides[0].screens[0].path, '/home');
     assert.deepEqual(c.security.csrf, { method: 'POST', path: '/api/probe', expect: 403 });
+    assert.deepEqual(c.sides[1].csrf, { method: 'PATCH', path: '/admin/users/1', expect: 419 });
+    assert.equal(c.sides[0].csrf, undefined);
 });
 
 test('config: errors name the field', () => {
@@ -43,6 +46,7 @@ test('config: errors name the field', () => {
     assert.throws(() => check({ baseUrl: 'http://x', sides: { jev: {} } }), /sides\.jev name can't be a suite or tag name/);
     assert.throws(() => check({ baseUrl: 'http://x', crawl: { skip: '(' } }), /crawl\.skip is not a valid regular expression/);
     assert.throws(() => check({ baseUrl: 'http://x', security: { csrf: { path: '/p' } } }), /csrf\.expect must be/);
+    assert.throws(() => check({ baseUrl: 'http://x', sides: { a: { csrf: { path: '/p', expect: 'x' } } } }), /sides\.a\.csrf\.expect must be/);
     assert.throws(() => check({ baseUrl: 'http://x', changes: ['src/**'] }), /changes must map a suite name/);
     assert.throws(() => check({ baseUrl: 'http://x', changes: { e2e: ['src/**'] } }), /changes\.e2e names a suite that doesn't exist/);
     assert.throws(() => check({ baseUrl: 'http://x', changes: { ux: 'src/**' } }), /changes\.ux must be a list of globs/);
@@ -109,4 +113,11 @@ test('session guard: LOGIN=1 is suggested on a manual side only', () => {
     assert.throws(() => guard(run({ form: {} }), '/orders', landed), (e) => e instanceof SessionExpired && !/LOGIN=1/.test(e.message));
     guard(run({ form: {} }), '/login', landed); // asked for the sign-in page itself: not an expiry
     guard(run({ none: true }), '/orders', landed); // a side that doesn't sign in
+});
+
+test('security: cookie flags, a CSRF token cookie may be read by script', () => {
+    const c = { name: 'app_session', httpOnly: false, sameSite: 'None', secure: false };
+    assert.deepEqual(cookieProblems(c, true), ['not HttpOnly', 'SameSite=None', 'not Secure']);
+    assert.deepEqual(cookieProblems({ ...c, name: 'XSRF-TOKEN', sameSite: 'Lax' }, false), []);
+    assert.deepEqual(cookieProblems({ ...c, name: 'csrftoken', sameSite: 'Strict' }, true), ['not Secure']);
 });

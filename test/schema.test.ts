@@ -46,7 +46,7 @@ test('schema: the example tapcheck.yml and the configs in the docs are valid', (
     const full = {
         baseUrl: 'http://127.0.0.1:8000', audience: 'a shop owner', loginPaths: '/login', out: '.tapcheck', routes: './bin/routes-json', flows: ['tests/tapcheck/*.ts'],
         app: { start: 'npm run dev', stop: 'docker compose down', ready: '/', timeout: 120, reset: './bin/reset', resetWhen: ['database/**'], allowRemoteReset: false },
-        sides: { public: {}, guest: null, staff: { login: 'manual' }, admin: { login: { manual: '/admin/sign-in' } }, api: { login: { command: './bin/session' } },
+        sides: { public: {}, guest: null, staff: { login: 'manual' }, admin: { login: { manual: '/admin/sign-in' } }, api: { login: { command: './bin/session' }, csrf: { method: 'PATCH', path: '/api/me', expect: 403 } },
             customer: { baseUrl: 'http://app.localhost:8000', login: { form: { url: '/login', fields: { email: '$TAPCHECK_EMAIL' }, submit: 'button', totp: { field: 'code', secret: '$TAPCHECK_TOTP' } } } } },
         screens: { customer: [{ name: 'Orders', path: '/orders', purpose: 'see past orders' }, { name: 'Order', from: '/orders', link: '^/orders/\\d+$', suffix: '/edit' }] },
         tasks: [{ name: 'Find', from: '/', goal: 'Find it.', done: 'It is open.', notDone: 'It is not.', optimal: 1, text: 'fern' }],

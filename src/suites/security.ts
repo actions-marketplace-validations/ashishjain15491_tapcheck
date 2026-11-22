@@ -2,9 +2,10 @@
  * Security evidence (measured, no Jev), over the pages the crawl reached:
  * - response headers on HTML pages: nosniff, framing blocked (X-Frame-Options or CSP frame-ancestors), Referrer-Policy,
  *   a CSP, HSTS when served over https;
- * - session cookies (a side that signs in): HttpOnly, SameSite, Secure over https;
+ * - session cookies (a side that signs in): HttpOnly (not for a CSRF token cookie), SameSite, Secure over https;
  * - signed out, every crawled page of a side that signs in refuses or sends the visitor to sign in;
- * - CSRF (when security.csrf is set): the request, signed in and without a token, is refused with the expected status;
+ * - CSRF (when security.csrf is set; on the sides that sign in, or every side when none does): the request, without a
+ *   token, is refused with the expected status;
  * - secrets: no API keys, private keys or tokens in the served HTML or in the app's own scripts as served;
  * - links that open a new tab carry rel=noopener (or noreferrer);
  * - no requests to third-party hosts outside security.allowedHosts, listed with the page that made them.
@@ -76,8 +77,9 @@ export async function run(r: Run) {
             // Cookies.
             const session = (await ctx.cookies(base)).filter((c) => /sess|auth|token|sid/i.test(c.name));
             for (const c of session) {
-                const bad = [!c.httpOnly && 'not HttpOnly', !['Lax', 'Strict'].includes(c.sameSite) && `SameSite=${c.sameSite}`, https && !c.secure && 'not Secure'].filter(Boolean);
-                r.record({ suite: S, where: `cookie ${c.name}`, check: 'session cookie flags', status: bad.length ? 'fail' : 'pass', detail: bad.join(', ') || `HttpOnly, SameSite=${c.sameSite}${https ? ', Secure' : ''}` });
+                const bad = cookieProblems(c, https);
+                r.record({ suite: S, where: `cookie ${c.name}`, check: 'session cookie flags', status: bad.length ? 'fail' : 'pass',
+                    detail: bad.join(', ') || `${c.httpOnly ? 'HttpOnly' : 'readable by script (a CSRF token)'}, SameSite=${c.sameSite}${https ? ', Secure' : ''}` });
             }
             if (!session.length) r.record({ suite: S, where: 'cookies', check: 'session cookie flags', status: 'warn', detail: 'no session-like cookie in the saved session' });
 
@@ -85,20 +87,21 @@ export async function run(r: Run) {
             const anon = await pwRequest.newContext();
             const open: string[] = [];
             for (const p of pages) {
-                const res = await anon.get(abs(r, p.path), { failOnStatusCode: false, maxRedirects: 0 }).catch(() => null);
+                // Redirects are followed: `/` → `/admin` → `/login` refuses as surely as one hop does.
+                const res = await anon.get(abs(r, p.path), { failOnStatusCode: false, maxRedirects: 5 }).catch(() => null);
                 if (!res) continue;
-                const to = res.headers()['location'] ?? '';
-                const toLogin = !!to && r.cfg.loginPaths.test(new URL(to, base).pathname);
-                const refused = [401, 403, 404, 419].includes(res.status()) || (res.status() >= 300 && res.status() < 400 && toLogin);
-                if (!refused) open.push(`${res.status()} ${p.path}${to ? ` → ${to}` : ''}`);
+                const to = new URL(res.url()).pathname, moved = to !== new URL(abs(r, p.path)).pathname;
+                const refused = [401, 403, 404, 419].includes(res.status()) || (moved && r.cfg.loginPaths.test(to));
+                if (!refused) open.push(`${res.status()} ${p.path}${moved ? ` → ${to}` : ''}`);
             }
             await anon.dispose();
             r.record({ suite: S, where: 'signed out', check: 'pages need sign-in', status: open.length ? 'fail' : 'pass', detail: open.slice(0, 8).join('; ') || `${pages.length} pages refused` });
         }
 
         // CSRF: the configured request, signed in, without a token.
-        const c = r.cfg.security.csrf;
-        if (c) {
+        // Sent on the sides that sign in, or on every side when none does (a public app's own forms).
+        const c = r.side.csrf ?? r.cfg.security.csrf;
+        if (c && (signsIn || r.cfg.sides.every((s) => 'none' in s.login))) {
             const res = await api.fetch(abs(r, c.path), { method: c.method, headers: { Accept: 'application/json' }, data: {}, failOnStatusCode: false });
             r.record({ suite: S, where: `${c.method} ${c.path} without a CSRF token`, check: `refused with ${c.expect}`, status: res.status() === c.expect ? 'pass' : 'fail', detail: `answered ${res.status()}` });
         }
@@ -119,3 +122,9 @@ export async function run(r: Run) {
         await ctx.close();
     }
 }
+
+/** What is wrong with a session-like cookie's flags. A CSRF token cookie (XSRF-TOKEN, csrftoken) is meant to be read
+ * by the page's script, so it may lack HttpOnly; SameSite and Secure still apply. */
+export const cookieProblems = (c: { name: string; httpOnly: boolean; sameSite: string; secure: boolean }, https: boolean): string[] =>
+    [!c.httpOnly && !/xsrf|csrf/i.test(c.name) && 'not HttpOnly', !['Lax', 'Strict'].includes(c.sameSite) && `SameSite=${c.sameSite}`,
+        https && !c.secure && 'not Secure'].filter((x): x is string => !!x);

@@ -65,6 +65,8 @@ export default {
             await t.mail.clear();
         });
         await t.step('signed out is its own page', async () => { t.expect((await t.page({ auth: false })) !== page, 'the same page came back'); });
+        t.note('slow answer', 'took 3 s');
+        t.note('refunds', 'skipped: billing is off', 'info');
     },
 } satisfies Flow;
 `);
@@ -83,6 +85,8 @@ export default {
         ['flow-ask-a-question', 'Ask a question', 'outside requests go to the stub', 'pass'], // it carried on after the failed step
         ['flow-ask-a-question', 'Ask a question', 'the confirmation email arrives', 'pass'],
         ['flow-ask-a-question', 'Ask a question', 'signed out is its own page', 'pass'],
+        ['flow-ask-a-question', 'Ask a question', 'slow answer', 'warn'],
+        ['flow-ask-a-question', 'Ask a question', 'refunds', 'info'],
     ], JSON.stringify(found, null, 1));
     assert.equal(found[0].detail, 'typed roses');
     assert.equal(found[1].detail, 'no "Saved" message after Save · console: save failed: no handler');

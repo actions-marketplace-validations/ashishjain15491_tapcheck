@@ -26,7 +26,9 @@ export type StubRule = { host?: string; method?: string; path?: string; status: 
 /** One answer of the stub's DNS server. An MX value is "<priority> <host>" or just the host (priority 10). */
 export const DNS_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'CNAME', 'NS'] as const;
 export type DnsRecord = { name: string; type: (typeof DNS_TYPES)[number]; values: string[] };
-export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[] };
+export type Csrf = { method: string; path: string; expect: number };
+/** `csrf`: this side's own CSRF probe, in place of security.csrf (another host often has other routes). */
+export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[]; csrf?: Csrf };
 export type Config = {
     root: string; // the config file's folder: gates, the routes command, flows and stub files are relative to it
     baseUrl: string;
@@ -40,7 +42,7 @@ export type Config = {
     audit: { max: number; skip?: RegExp }; // max: crawled pages audited on top of the screens (0: screens only); skip: paths left out
     // The design tokens the audit holds computed styles to; a list left out isn't checked. Colours are hex, radii and spacing px.
     design?: { colors?: string[]; fonts?: string[]; radii?: number[]; spacing?: number[] };
-    security: { csrf?: { method: string; path: string; expect: number }; allowedHosts: string[]; publicWrites?: RegExp }; // publicWrites: routes that write without sign-in on purpose
+    security: { csrf?: Csrf; allowedHosts: string[]; publicWrites?: RegExp }; // publicWrites: routes that write without sign-in on purpose
     viewports: { name: string; width: number; height: number; mobile: boolean }[];
     out: string;
     audience: string; // who the app is for, in the words Jev is asked with ("a shop owner", "a nurse on a ward")
@@ -113,6 +115,13 @@ function login(v: unknown, field: string): Login {
         return { form: { url: str(f.url, `${field}.form.url`)!, fields: f.fields, submit: str(f.submit, `${field}.form.submit`, true), totp } };
     }
     fail(field, `has an unknown kind "${keys[0]}" (use manual, form or command)`);
+}
+
+function csrfOf(v: any, field: string): Csrf | undefined {
+    if (v === undefined) return undefined;
+    if (!v || typeof v !== 'object') fail(field, 'must be {method?, path, expect}');
+    if (!Number.isInteger(v.expect)) fail(`${field}.expect`, 'must be the HTTP status the app answers with (e.g. 403 or 419)');
+    return { method: (str(v.method ?? 'POST', `${field}.method`)!).toUpperCase(), path: str(v.path, `${field}.path`)!, expect: v.expect };
 }
 
 function screens(v: unknown, field: string): Screen[] {
@@ -243,12 +252,12 @@ export function check(raw: any, root = process.cwd()): Config {
     const byside = (key: 'screens' | 'tasks', side: string) => (Array.isArray(raw[key]) ? raw[key] : raw[key]?.[side]);
     const at = (key: 'screens' | 'tasks', side: string) => (Array.isArray(raw[key]) ? key : `${key}.${side}`);
     const sideDefs: Record<string, any> = raw.sides ?? { public: {} };
-    if (typeof sideDefs !== 'object' || Array.isArray(sideDefs) || !Object.keys(sideDefs).length) fail('sides', 'must map each side name to {login, baseUrl?}');
+    if (typeof sideDefs !== 'object' || Array.isArray(sideDefs) || !Object.keys(sideDefs).length) fail('sides', 'must map each side name to {login, baseUrl?, csrf?}');
     const sides = Object.entries(sideDefs).map(([name, s]): Side => {
         if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`sides.${name}`, 'name must be lowercase letters, digits and dashes');
         // Side names are tags too (ONLY=<side>), so they can't reuse a suite or kind tag.
         if ([...CHANGE_KEYS, 'jev', 'measured'].includes(name)) fail(`sides.${name}`, `name can't be a suite or tag name (${[...CHANGE_KEYS, 'jev', 'measured'].join(', ')})`);
-        return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`),
+        return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`), csrf: csrfOf(s?.csrf, `sides.${name}.csrf`),
             screens: screens(byside('screens', name), at('screens', name)), tasks: tasks(byside('tasks', name), at('tasks', name)) };
     });
     for (const key of ['screens', 'tasks'] as const) {
@@ -269,12 +278,7 @@ export function check(raw: any, root = process.cwd()): Config {
     const auditMax = au.max ?? 0;
     if (!Number.isInteger(auditMax) || auditMax < 0) fail('audit.max', 'must be a whole number, 0 or more');
     const s = raw.security ?? {};
-    let csrf;
-    if (s.csrf !== undefined) {
-        const expect = s.csrf.expect;
-        if (!Number.isInteger(expect)) fail('security.csrf.expect', 'must be the HTTP status the app answers with (e.g. 403 or 419)');
-        csrf = { method: (str(s.csrf.method ?? 'POST', 'security.csrf.method')!).toUpperCase(), path: str(s.csrf.path, 'security.csrf.path')!, expect };
-    }
+    const csrf = csrfOf(s.csrf, 'security.csrf');
     const allowedHosts = s.allowedHosts ?? [];
     if (!Array.isArray(allowedHosts)) fail('security.allowedHosts', 'must be a list of host names');
 

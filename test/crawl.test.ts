@@ -27,8 +27,9 @@ test('crawl: the route list seeds the queue and gives route coverage', async () 
     const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } };
     await crawl.run(r);
 
-    // /about is only in the route list; /admin refuses this side and is no finding; /export matches crawl.skip and is never asked for.
-    assert.deepEqual(r.crawl.pages.map((p) => p.path), ['/', '/about', '/plants/7']);
+    // Links first, then routes: /about is only in the route list; /admin refuses this side and is no finding (nor does it use up
+    // crawl.max); /export matches crawl.skip and is never asked for.
+    assert.deepEqual(r.crawl.pages.map((p) => p.path), ['/', '/plants/7', '/about']);
     assert.ok(asked.includes('/admin') && !asked.includes('/export') && !asked.includes('/plants'));
     assert.deepEqual(found.filter((f) => f.status === 'fail'), []);
     assert.deepEqual(found.find((f) => f.check === 'route coverage'), { suite: 'crawl', where: 'routes', check: 'route coverage', status: 'info',

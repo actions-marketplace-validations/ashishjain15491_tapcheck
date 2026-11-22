@@ -34,6 +34,7 @@ sides:                              # default: { public: {} }. Names: lowercase 
   customer:
     baseUrl: http://app.localhost:8000   # optional, when this side lives at another address
     login: …                        # one of the kinds below; leaving it out means none
+    csrf: { method: PATCH, path: /admin/users/0, expect: 419 }   # optional: this side's CSRF probe, in place of security.csrf
 
 screens: […]                        # a list for every side, or { <side>: [...] }
 tasks: […]                          # same
@@ -60,7 +61,7 @@ design:                             # optional design tokens; the audit warns ab
   spacing: [4, 8, 16, 24]
 
 security:
-  csrf: { method: POST, path: /orders, expect: 419 }   # sent signed in, without a token; must be refused with exactly `expect`
+  csrf: { method: POST, path: /orders, expect: 419 }   # sent without a token on each side that signs in (every side if none does); must be refused with exactly `expect`
   allowedHosts: [fonts.example.com] # third-party hosts the pages may call; any other is a failing finding
   publicWrites: "^/(login|webhooks/)"  # POST/PUT/PATCH/DELETE routes that need no sign-in on purpose (see routes)
 
@@ -175,7 +176,7 @@ A gate passes on exit 0; `warn: true` turns a failure into a warning; `timeout` 
 `routes` is any command printing JSON `[{"method": "GET", "path": "/orders/{id}", "auth": true}]`. `method` may be
 `"GET|HEAD"` or a list; `auth` is optional. Path parameters in any of these styles: `{id}` `{id?}` `<int:pk>` `<pk>`
 `:id` `(.:format)` `*splat`. Routes written as regular expressions aren't understood: leave them out. With routes, the
-crawl also visits every GET route without parameters and reports route coverage, and `code` lists writing routes
+crawl also visits the GET routes without parameters (after the links it found, up to `crawl.max`) and reports route coverage, and `code` lists writing routes
 with `auth: false` that don't match `security.publicWrites` as a warning.
 
 ## changes (for CHANGED=1)
@@ -266,7 +267,7 @@ app answered a request for it with anything but 401, 403, 404 or 405.
 Journeys only this app has, written as TypeScript or JavaScript files (ES modules: in a project whose `package.json`
 says `"type": "commonjs"`, name them `.mts` or `.mjs`); each is its own part, `flow-<name>`. Unlike the
 suites, a flow may submit forms and change data, so it belongs with `app.reset` and `RESET=1`. The file format and
-the `t` helpers (`t.goto`, `t.page`, `t.step`, `t.expect`, `t.jev`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
+the `t` helpers (`t.goto`, `t.page`, `t.step`, `t.expect`, `t.note`, `t.jev`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
 top of `src/flow.ts` in the tapcheck folder (`<skill base directory>/../../src/flow.ts`), with a working example in
 `examples/static-site/tests/tapcheck/` there. `await t.jev('cart with two items')` has Jev look at the current page
 (the visual questions, or your own), and `await t.mail.judge(mail)` at an email from `t.mail.waitFor`: each answer is

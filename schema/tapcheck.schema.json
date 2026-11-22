@@ -42,7 +42,8 @@
                 "additionalProperties": false,
                 "properties": {
                     "baseUrl": { "description": "This side's own address, when it differs from the top-level baseUrl.", "type": "string", "pattern": "^(https?://[^/]+|.*\\$\\{?[A-Z_])" },
-                    "login": { "$ref": "#/definitions/login" }
+                    "login": { "$ref": "#/definitions/login" },
+                    "csrf": { "$ref": "#/definitions/csrf", "description": "This side's own CSRF probe, in place of security.csrf (another host often has other routes)." }
                 }
             }
         },
@@ -110,17 +111,7 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "csrf": {
-                    "description": "A request sent signed in and without a token; it must be refused with exactly `expect`.",
-                    "type": "object",
-                    "required": ["path", "expect"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "method": { "$ref": "#/definitions/text", "default": "POST" },
-                        "path": { "$ref": "#/definitions/text" },
-                        "expect": { "description": "The HTTP status the app answers with, e.g. 403 or 419.", "type": "integer" }
-                    }
-                },
+                "csrf": { "$ref": "#/definitions/csrf" },
                 "allowedHosts": { "description": "Third-party hosts the pages may call; a request to any other is a failing finding.", "type": "array", "items": { "type": "string" }, "default": [] },
                 "publicWrites": { "$ref": "#/definitions/text", "description": "Regular expression (case-insensitive) of POST/PUT/PATCH/DELETE routes that need no sign-in on purpose, e.g. ^/(login|webhooks/)." }
             }
@@ -273,6 +264,17 @@
         }
     },
     "definitions": {
+        "csrf": {
+            "description": "A request sent without a token on each side that signs in (every side when none does); it must be refused with exactly `expect`.",
+            "type": "object",
+            "required": ["path", "expect"],
+            "additionalProperties": false,
+            "properties": {
+                "method": { "$ref": "#/definitions/text", "default": "POST" },
+                "path": { "$ref": "#/definitions/text" },
+                "expect": { "description": "The HTTP status the app answers with, e.g. 403 or 419.", "type": "integer" }
+            }
+        },
         "text": { "type": "string", "pattern": "\\S" },
         "login": {
             "description": "How this side signs in. Leaving it out means none.",

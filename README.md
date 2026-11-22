@@ -182,7 +182,7 @@ design: { colors: ["#1f2937", "#ffffff"], fonts: [Inter], radii: [0, 4, 8], spac
 ```
 
 - **Gates** run as the part `code`, which has no side: `ONLY=code tapcheck` starts neither the app nor a browser.
-- **Routes** feed the crawl (parameterless GET routes are visited; "route coverage" says how many were reached) and
+- **Routes** feed the crawl (parameterless GET routes fill what the links leave of `crawl.max`; "route coverage" says how many were reached) and
   let `code` list writing routes with `auth: false` as a warning.
 - **Stub**: tapcheck starts it before `app.start` and sets `TAPCHECK_STUB_URL`. Point each provider's base URL at
   `${TAPCHECK_STUB_URL}/<its host>`, for example

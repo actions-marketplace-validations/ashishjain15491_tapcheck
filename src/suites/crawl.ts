@@ -3,8 +3,8 @@
  * in-app link they show, two levels deep and at most crawl.max pages: each page's status, load time, console and page
  * errors, broken images, links that answer 4xx/5xx, form fields without a label, and every request the page made (kept for
  * the contract and security suites). GET only: links matching crawl.skip (sign out, delete, export…) are never followed.
- * With a `routes` command, the app's parameterless GET routes are visited too (one this side is refused, or that isn't a
- * page, is left out quietly), and "route coverage" says how many GET routes the crawl reached; the rest are listed in
+ * With a `routes` command, the app's parameterless GET routes fill what the links leave of crawl.max (one this side is
+ * refused, or that isn't a page, is left out quietly), and "route coverage" says how many GET routes the crawl reached; the rest are listed in
  * missed-routes.json.
  */
 import { writeFileSync } from 'node:fs';
@@ -46,13 +46,18 @@ export async function run(r: Run) {
     const seeds = r.side.screens.filter((s) => s.path && host(abs(r, s.path)) === own).map((s) => s.path!);
     const queue = (seeds.length ? seeds : ['/']).map((path) => ({ path, depth: 0, route: false }));
     const seen = new Set(queue.map((q) => q.path));
-    for (const { path } of gets) if (!hasParams(path) && !seen.has(path)) { seen.add(path); queue.push({ path, depth: 0, route: true }); }
+    // The routes fill what the links leave of crawl.max: links first, so a long route list can't crowd them out.
+    const fill = gets.filter((x) => !hasParams(x.path) && !seen.has(x.path)).map((x) => ({ path: x.path, depth: 0, route: true }));
     let visits = 0;
     const linkStatus = new Map<string, number>();
 
     try {
-        while (queue.length && visits++ < r.cfg.crawl.max) {
-            const { path, depth, route } = queue.shift()!;
+        while (visits < r.cfg.crawl.max) {
+            const next = queue.shift() ?? fill.shift();
+            if (!next) break;
+            const { path, depth, route } = next;
+            if (route && seen.has(path)) continue; // a link reached it already
+            if (route) seen.add(path);
             current = path;
             errors.length = 0;
             const t0 = Date.now();
@@ -68,6 +73,7 @@ export async function run(r: Run) {
             const links = [...new Set((f?.controls ?? []).map((c) => c.href).filter((h): h is string => !!h && host(h) === own)
                 .map((h) => { const u = new URL(h); return u.pathname + u.search; }))];
             r.crawl.pages.push({ path, status: st, finalPath, ms, errors: [...errors], links });
+            visits++;
 
             const where = path;
             r.record({ suite: S, where, check: 'page answers', status: st >= 200 && st < 400 ? 'pass' : 'fail', detail: `${st}${finalPath !== path.split('?')[0] ? ` → ${finalPath}` : ''}` });

@@ -13,7 +13,7 @@
  *   } satisfies Flow;
  *
  * Each step is one finding: pass, or fail with what was thrown, a screenshot and the page's console errors; the flow
- * carries on after a failed step. Unlike the suites, a flow may click anything and change data: run it against a copy
+ * carries on after a failed step; t.note(name, detail, 'warn' | 'info') records a warning or a note without a step. Unlike the suites, a flow may click anything and change data: run it against a copy
  * you can reset. t.jev() and t.mail.judge() ask Jev to look at the current page or at an email; with JEV=off or no key
  * they record that they were skipped and return null, so a flow that calls them still runs everywhere.
  */
@@ -94,6 +94,11 @@ export class T {
         } finally {
             this.r.step = undefined;
         }
+    }
+
+    /** A finding the flow decides itself: a warning (default), or info such as a check it skipped and why. */
+    note(name: string, detail: string, status: 'warn' | 'info' = 'warn'): void {
+        this.r.record({ suite: this.flow.part, where: this.flow.name, check: name, status, detail });
     }
 
     /** Records that Jev's look at `label` was skipped, and why. */
