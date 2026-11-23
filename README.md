@@ -193,7 +193,8 @@ design: { colors: ["#1f2937", "#ffffff"], fonts: [Inter], radii: [0, 4, 8], spac
   'tapcheck'` types them. Each `t.step(name, fn)` is a finding; a failed step keeps a screenshot and the flow carries
   on. The helpers (`t.goto`, `t.page`, `t.expect`, `t.jev`, `t.stub`, `t.routeOutside`, `t.mail`) are described in
   [src/flow.ts](src/flow.ts). `t.jev(label)` has Jev look at the current page and `t.mail.judge(mail)` at an email;
-  both are skipped (and say so) with `JEV=off` or no key.
+  both are skipped (and say so) with `JEV=off` or no key. `t.page({ viewport: 'mobile' })` is a page at another of the
+  config's viewports (the first one by default); the page handed out last is the one `t.goto` and `t.jev` act on.
 - **Interact** needs its side's crawl (it clicks through the screens the crawl reached, `interact.max` at most) and
   writes `interact.json`: the controls, dialogs and table controls it exercised.
 - **Audit** checks the configured screens. With `design:`, a computed colour, font, radius or spacing that isn't one

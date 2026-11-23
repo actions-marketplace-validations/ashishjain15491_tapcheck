@@ -43,7 +43,7 @@ export class T {
     private r: Run;
     private flow: Loaded;
     private stubUrl?: string;
-    private pages = new Map<boolean, Page>(); // signed in → page
+    private pages = new Map<string, Page>(); // "<viewport> <signed in>" → page
     private errors = new WeakMap<Page, string[]>();
     private current?: Page; // the page last handed out: goto() drives it, a failed step shows it
 
@@ -53,15 +53,22 @@ export class T {
         this.stubUrl = stubUrl;
     }
 
-    /** A page on the flow's side at the first viewport, signed in with the side's session (`{ auth: false }`: signed out). One of each is kept. */
-    async page(opts: { auth?: boolean } = {}): Promise<Page> {
-        const auth = opts.auth !== false;
-        if (!this.pages.has(auth)) {
-            const page = await (await context(this.r, this.r.cfg.viewports[0], auth)).newPage();
+    /**
+     * A page on the flow's side, signed in with the side's session (`{ auth: false }`: signed out), at the first viewport
+     * or the one `viewport` names (`{ viewport: 'mobile' }`, a name from the config's viewports). One of each is kept, and
+     * the page handed out last is the current one: t.goto() and t.jev() act on it.
+     */
+    async page(opts: { auth?: boolean; viewport?: string } = {}): Promise<Page> {
+        const auth = opts.auth !== false, all = this.r.cfg.viewports;
+        const vp = opts.viewport === undefined ? all[0] : all.find((v) => v.name === opts.viewport);
+        if (!vp) throw new Error(`t.page: no viewport is called "${opts.viewport}" (viewports: ${all.map((v) => v.name).join(', ')}).`);
+        const key = `${vp.name} ${auth}`;
+        if (!this.pages.has(key)) {
+            const page = await (await context(this.r, vp, auth)).newPage();
             this.errors.set(page, watch(page));
-            this.pages.set(auth, page);
+            this.pages.set(key, page);
         }
-        return (this.current = this.pages.get(auth)!);
+        return (this.current = this.pages.get(key)!);
     }
 
     /** Opens a path of the side (or a full URL) on the current page and waits for it to settle. */

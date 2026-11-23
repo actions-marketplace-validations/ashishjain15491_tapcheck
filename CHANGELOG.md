@@ -54,3 +54,5 @@ The first version. Not yet published to npm.
   its own files needs `--disable-features=LocalNetworkAccessChecks`). A side whose sign-in fails says so in the terminal, not only in the report.
   Waiting for a page to settle is capped outside the page, so a page whose own timers never fire (one
   sandboxed by its CSP without `allow-scripts`, such as an email preview) can't hang the run.
+  `t.page({ viewport: 'mobile' })` hands a flow a page at any of the config's viewports (the first one by default), so
+  a flow can check a journey at a phone's width and have Jev look at it.

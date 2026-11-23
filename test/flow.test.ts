@@ -71,13 +71,20 @@ export default {
         });
         await t.step('it works, with a caveat', async () => ({ warn: 'no way to undo it on screen' }));
         await t.step('signed out is its own page', async () => { t.expect((await t.page({ auth: false })) !== page, 'the same page came back'); });
+        await t.step('a named viewport is its own page, and the current one', async () => {
+            const phone = await t.page({ viewport: 'phone' });
+            t.expect(phone !== page && phone.viewportSize().width === 390 && (await t.page({ viewport: 'phone' })) === phone, 'not one kept page at 390 px');
+            t.expect((await t.goto('/ask')) === phone && (await t.page()) === page, 'goto() did not drive the page handed out last');
+            const err = await t.page({ viewport: 'tv' }).catch((e) => e.message);
+            t.expect(err === 't.page: no viewport is called "tv" (viewports: desktop, phone).', String(err));
+        });
         t.note('slow answer', 'took 3 s');
         t.note('refunds', 'skipped: billing is off', 'info');
     },
 } satisfies Flow;
 `);
     writeFileSync(`${tmp}/crash.flow.js`, "export default { name: 'Crash', side: 'staff', run: async (t) => { await t.step('before', async () => {}); t.stub; } };\n");
-    const cfg = check({ baseUrl: base, sides: { customer: {}, staff: {} }, viewports: [{ name: 'desktop', width: 800, height: 600 }], flows: ['*.flow.ts', '*.flow.*'], mail: { mailpit: base } }, tmp);
+    const cfg = check({ baseUrl: base, sides: { customer: {}, staff: {} }, viewports: [{ name: 'desktop', width: 800, height: 600 }, { name: 'phone', width: 390, height: 844, mobile: true }], flows: ['*.flow.ts', '*.flow.*'], mail: { mailpit: base } }, tmp);
     const flows = await loadFlows(cfg);
     assert.deepEqual(flows.map((f) => [f.part, f.side]), [['flow-ask-a-question', 'customer'], ['flow-crash', 'staff']]);
 
@@ -92,6 +99,7 @@ export default {
         ['flow-ask-a-question', 'Ask a question', 'the confirmation email arrives', 'pass'],
         ['flow-ask-a-question', 'Ask a question', 'it works, with a caveat', 'warn'],
         ['flow-ask-a-question', 'Ask a question', 'signed out is its own page', 'pass'],
+        ['flow-ask-a-question', 'Ask a question', 'a named viewport is its own page, and the current one', 'pass'],
         ['flow-ask-a-question', 'Ask a question', 'slow answer', 'warn'],
         ['flow-ask-a-question', 'Ask a question', 'refunds', 'info'],
     ], JSON.stringify(found, null, 1));

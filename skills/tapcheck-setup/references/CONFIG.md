@@ -275,7 +275,9 @@ top of `src/flow.ts` in the tapcheck folder (`<skill base directory>/../../src/f
 (the visual questions, or your own), and `await t.mail.judge(mail)` at an email from `t.mail.waitFor`: each answer is
 a finding of the flow, and with `JEV=off` or no key both record that they were skipped and return `null`. A step
 that returns `{ warn: '…' }` is a warning rather than a pass; `t.mail.count()` and `t.mail.all()` take the same
-`{ to, subject }` filter as `waitFor`, and every message carries its `headers`.
+`{ to, subject }` filter as `waitFor`, and every message carries its `headers`. `t.page()` is the flow's page at the
+first viewport; `t.page({ viewport: 'mobile' })` is one at the viewport of that name, and the page handed out last is
+the one `t.goto()` and `t.jev()` act on.
 
 ## browser.args
 
