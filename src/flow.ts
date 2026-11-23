@@ -13,8 +13,10 @@
  *   } satisfies Flow;
  *
  * Each step is one finding: pass, or fail with what was thrown, a screenshot and the page's console errors (a step that
- * returns `{ warn: '…' }` is a warning instead); the flow
- * carries on after a failed step, and a flow that takes longer than its `timeout` (seconds, default 3600) fails; t.note(name, detail, 'warn' | 'info') records a warning or a note without a step. Unlike the suites, a flow may click anything and change data: run it against a copy
+ * returns `{ warn: '…' }` is a warning instead); the flow carries on after a failed step. A flow that takes longer than
+ * its `timeout` (seconds, default 3600) fails: nothing it does after that is recorded, t.signal is aborted, and what it
+ * gave t.cleanup(fn) runs (as it does when the flow ends). t.note(name, detail, 'warn' | 'info' | 'fail') records a
+ * finding without a step. Unlike the suites, a flow may click anything and change data: run it against a copy
  * you can reset. t.jev() and t.mail.judge() ask Jev to look at the current page or at an email; with JEV=off or no key
  * they record that they were skipped and return null, so a flow that calls them still runs everywhere.
  */
@@ -22,15 +24,16 @@ import { globSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BrowserContext, Page } from 'playwright';
-import { abs, context, settle, slices, slug, watch, type Run } from './browser.ts';
+import { abs, context, guard, host, reach, settle, slices, slug, watch, type Run } from './browser.ts';
 import { isLocal, type Config } from './config.ts';
 import * as jev from './jev.ts';
 import { EMAIL, VISUAL, YES_IS_DEFECT } from './questions.ts';
 import type { Finding } from './report.ts';
 import type { FailRule, Reply, Seen } from './stub.ts';
 
-/** For a flow's own questions to t.jev() and t.mail.judge(). */
+/** For a flow's own questions to t.jev(), t.ask() and t.mail.judge(), and tapcheck's own sets to start from. */
 export { choice, noul, score } from '@typesafe-ai/sdk';
+export { EMAIL, VISUAL } from './questions.ts';
 /** timeout: seconds the whole flow may take (default 3600); past it the flow fails and the run goes on. */
 export type Flow = { name: string; side?: string; timeout?: number; run: (t: T) => Promise<void> };
 /** A flow as loaded: its side settled and its part name. */
@@ -44,8 +47,17 @@ export class T {
     private flow: Loaded;
     private stubUrl?: string;
     private pages = new Map<string, Page>(); // "<viewport> <signed in>" → page
+    private fresh: BrowserContext[] = []; // contexts of t.page({ fresh: true }), closed with the flow
+    private signedOut = new WeakSet<Page>();
     private errors = new WeakMap<Page, string[]>();
     private current?: Page; // the page last handed out: goto() drives it, a failed step shows it
+    private cleanups: (() => unknown)[] = [];
+    private shots = 0;
+    private dead = false; // past the flow's timeout: what it still records is dropped
+    private cleaning = false; // the cleanups run: they may use t.* even past the timeout
+    private abort = new AbortController();
+    /** Aborted when the flow runs out of time: pass it to long waits of your own, or check `t.signal.aborted` in a loop. */
+    readonly signal = this.abort.signal;
 
     constructor(r: Run, flow: Loaded, stubUrl?: string) {
         this.r = r;
@@ -53,30 +65,77 @@ export class T {
         this.stubUrl = stubUrl;
     }
 
+    /** The run's folder, for files of the flow's own (a payload log, a list it made). */
+    get dir(): string { return this.r.dir; }
+
+    private record(f: Omit<Finding, 'side'>) { if (!this.dead || this.cleaning) this.r.record(f); }
+
+    /** Stops the flow at its timeout: later findings are dropped and `t.signal` is aborted. */
+    kill(why: string) { this.dead = true; this.abort.abort(new Error(why)); }
+
+    /** Past the timeout every t.* call throws, so the abandoned run() stops at its next one. */
+    private alive() { if (this.dead && !this.cleaning) throw this.signal.reason; }
+
+    /** Runs `fn` when the flow ends, also when it fails or runs out of time (each one gets 60 s): put back what it changed. */
+    cleanup(fn: () => unknown): void { this.alive(); this.cleanups.push(fn); }
+
+    /** Runs the cleanups, last added first; one that throws or hangs is a warning. */
+    async finish() {
+        this.cleaning = true;
+        for (let fn; (fn = this.cleanups.pop()); ) {
+            let timer: NodeJS.Timeout | undefined;
+            const cap = new Promise((_, no) => { timer = setTimeout(() => no(new Error('it took over 60 s')), 60_000); });
+            try { await Promise.race([Promise.resolve().then(fn), cap]); } catch (e) {
+                this.r.record({ suite: this.flow.part, where: this.flow.name, check: 'cleanup ran', status: 'warn', detail: String((e as Error).message ?? e).slice(0, 300) });
+            } finally { clearTimeout(timer); }
+        }
+        this.cleaning = false;
+        this.dead = true; // the flow is over: an abandoned run() that wakes up later records nothing
+    }
+
     /**
      * A page on the flow's side, signed in with the side's session (`{ auth: false }`: signed out), at the first viewport
      * or the one `viewport` names (`{ viewport: 'mobile' }`, a name from the config's viewports). One of each is kept, and
-     * the page handed out last is the current one: t.goto() and t.jev() act on it.
+     * the page handed out last is the current one: t.goto() and t.jev() act on it. `{ fresh: true }` gives a new page in
+     * a context of its own every time (cookies and storage its own too), for a second visitor or a sign-in of the flow's own.
      */
-    async page(opts: { auth?: boolean; viewport?: string } = {}): Promise<Page> {
+    async page(opts: { auth?: boolean; viewport?: string; fresh?: boolean } = {}): Promise<Page> {
+        this.alive();
         const auth = opts.auth !== false, all = this.r.cfg.viewports;
         const vp = opts.viewport === undefined ? all[0] : all.find((v) => v.name === opts.viewport);
         if (!vp) throw new Error(`t.page: no viewport is called "${opts.viewport}" (viewports: ${all.map((v) => v.name).join(', ')}).`);
-        const key = `${vp.name} ${auth}`;
-        if (!this.pages.has(key)) {
-            const page = await (await context(this.r, vp, auth)).newPage();
+        const open = async () => {
+            const ctx = await context(this.r, vp, auth);
+            const page = await ctx.newPage();
             this.errors.set(page, watch(page));
-            this.pages.set(key, page);
-        }
+            if (!auth) this.signedOut.add(page);
+            return { ctx, page };
+        };
+        if (opts.fresh) { const { ctx, page } = await open(); this.fresh.push(ctx); return (this.current = page); }
+        const key = `${vp.name} ${auth}`;
+        if (!this.pages.has(key)) this.pages.set(key, (await open()).page);
         return (this.current = this.pages.get(key)!);
     }
 
-    /** Opens a path of the side (or a full URL) on the current page and waits for it to settle. */
-    async goto(path: string): Promise<Page> {
+    /**
+     * Opens a path of the side (or a full URL) on the current page and waits for it to settle. On a signed-in page, being
+     * sent to sign in (`loginPaths`) when the path isn't a sign-in page throws: the side's session has ended. A flow that
+     * expects to be sent there (after signing out, or to check a page is refused) passes `{ guard: false }`.
+     */
+    async goto(path: string, opts: { guard?: boolean } = {}): Promise<Page> {
+        this.alive();
         const page = this.current ?? await this.page();
-        await page.goto(abs(this.r, path), { waitUntil: 'domcontentloaded' });
+        const url = abs(this.r, path);
+        await page.goto(url, { waitUntil: 'domcontentloaded' });
         await settle(page);
+        if (opts.guard !== false && !this.signedOut.has(page)) guard(this.r, new URL(url).pathname, page.url());
         return page;
+    }
+
+    /** Counts a request to the app the flow made itself (page.request, fetch) as reached, for hits.json and COVERAGE=1. */
+    reach(method: string, url: string): void {
+        const u = new URL(abs(this.r, url));
+        if (host(u.href) === host(this.r.side.baseUrl)) reach(this.r, `${method.toUpperCase()} ${u.pathname}`); // another host isn't the app's
     }
 
     /** Throws `msg` unless `cond` holds. (Not an `asserts` signature: TypeScript refuses those on the untyped `t` of `run: async (t) => …`.) */
@@ -89,46 +148,55 @@ export class T {
      * `{ warn }` makes it a warning with that detail (it worked, with something to look at). Returns whether it didn't fail.
      */
     async step(name: string, fn: () => Promise<void | string | { warn: string }>): Promise<boolean> {
+        this.alive();
         const errors = this.current && this.errors.get(this.current);
         if (errors) errors.length = 0;
         const base = { suite: this.flow.part, where: this.flow.name, check: name };
+        const t0 = Date.now();
+        const done = (mark: string) => { if (!this.dead || this.cleaning) process.stdout.write(`    ${mark} ${name} (${((Date.now() - t0) / 1000).toFixed(1)} s)\n`); }; // progress, one line a step
         this.r.step = name; // what the step reaches is filed under it (hits.json)
         try {
             const out = await fn();
-            if (out && typeof out === 'object') this.r.record({ ...base, status: 'warn', detail: out.warn });
-            else this.r.record({ ...base, status: 'pass', detail: out || undefined });
+            if (out && typeof out === 'object') { this.record({ ...base, status: 'warn', detail: out.warn }); done('!'); }
+            else { this.record({ ...base, status: 'pass', detail: out || undefined }); done('✓'); }
             return true;
         } catch (e) {
             const page = this.current, seen = (page && this.errors.get(page)) ?? [];
-            let shot: string | undefined = `${this.r.dir}/shots/${this.flow.part}-${slug(name)}.png`;
+            let shot: string | undefined = `${this.r.dir}/shots/${this.flow.part}-${String(++this.shots).padStart(3, '0')}-${slug(name)}.png`;
             mkdirSync(`${this.r.dir}/shots`, { recursive: true });
             if (!page || page.isClosed() || !(await page.screenshot({ path: shot }).then(() => true, () => false))) shot = undefined;
-            this.r.record({ ...base, status: 'fail', evidence: shot ? [shot] : undefined,
-                detail: [String((e as Error).message ?? e).split('\n').slice(0, 4).join(' ⏎ ').slice(0, 500), seen.length ? `console: ${seen.slice(0, 3).join(' | ').slice(0, 300)}` : ''].filter(Boolean).join(' · ') });
+            this.record({ ...base, status: 'fail', evidence: shot ? [shot] : undefined,
+                detail: [String((e as Error).message ?? e).split('\n').slice(0, 6).join(' ⏎ ').slice(0, 800), seen.length ? `console: ${seen.slice(0, 3).join(' | ').slice(0, 300)}` : ''].filter(Boolean).join(' · ') });
+            done('✗');
             return false;
         } finally {
             this.r.step = undefined;
         }
     }
 
-    /** A finding the flow decides itself: a warning (default), or info such as a check it skipped and why. */
-    note(name: string, detail: string, status: 'warn' | 'info' = 'warn'): void {
-        this.r.record({ suite: this.flow.part, where: this.flow.name, check: name, status, detail });
+    /** A finding the flow decides itself: a warning (default), a failure, or info such as a check it skipped and why. */
+    note(name: string, detail: string, status: 'warn' | 'info' | 'fail' = 'warn'): void {
+        this.record({ suite: this.flow.part, where: this.flow.name, check: name, status, detail });
     }
 
     /** Records that Jev's look at `label` was skipped, and why. */
     private skipped(label: string, why: string): null {
-        this.r.record({ suite: this.flow.part, where: `${this.flow.name} › ${label}`, check: "Jev's look", status: 'info', detail: `skipped (${why})` });
+        this.record({ suite: this.flow.part, where: `${this.flow.name} › ${label}`, check: "Jev's look", status: 'info', detail: `skipped (${why})` });
         return null;
     }
 
-    /** Asks Jev about `shots`; one finding per answer. Null (and one info finding) when its budget is spent. */
+    /**
+     * Asks Jev about `state`; one finding per answer. Null, and one finding, when its budget is spent (info) or Jev can't
+     * be reached (a warning): a look never stops the flow.
+     */
     private async look(label: string, state: Record<string, unknown>, questions: Record<string, any>, shots: string[]): Promise<Record<string, any> | null> {
-        const rec = (check: string, status: Finding['status'], detail?: string) => this.r.record({ suite: this.flow.part, where: `${this.flow.name} › ${label}`, check, status, detail, evidence: shots });
+        const rec = (check: string, status: Finding['status'], detail?: string) => this.record({ suite: this.flow.part, where: `${this.flow.name} › ${label}`, check, status, detail, evidence: shots.length ? shots : undefined });
         let a: Record<string, any>;
         try { a = await jev.ask(`${this.flow.part}:${label}`, state, questions, shots); } catch (e) {
             if (e instanceof jev.BudgetReached) return this.skipped(label, e.message);
-            throw e;
+            if (!(e instanceof jev.Unavailable)) throw e; // the flow's own mistake (a missing image file, say)
+            rec("Jev's look", 'warn', `Jev couldn't be asked: ${e.message.slice(0, 300)}`);
+            return null;
         }
         for (const [k, v] of Object.entries(a)) {
             const name = `jev: ${k.replace(/_/g, ' ')}`;
@@ -152,12 +220,27 @@ export class T {
         const vh = page.viewportSize()?.height ?? 800;
         const shoot = async () => {
             await settle(page);
-            return slices(this.r, page, `${this.flow.part}-jev-${slug(label)}`, await page.evaluate(() => document.documentElement.scrollHeight), vh);
+            // With a dialog open only the screen is looked at: the page behind it scrolled into slices would be the same shot again.
+            const height = await page.evaluate(() => [...document.querySelectorAll('dialog[open], [role=dialog][aria-modal=true], [role=alertdialog]')].some((d) => {
+                if (d.tagName === 'DIALOG' && !d.matches(':modal')) return false; // dialog.show(): a banner, not modal
+                const b = d.getBoundingClientRect();
+                return d.checkVisibility({ visibilityProperty: true, opacityProperty: true }) && b.width > 0 && b.bottom > 0 && b.top < innerHeight && b.right > 0 && b.left < innerWidth;
+            }) ? 0 : document.documentElement.scrollHeight);
+            return slices(this.r, page, `${this.flow.part}-jev-${slug(label)}`, height || vh, vh);
         };
         // A page that reloads itself while it is looked at (after a save, say) throws the look out: look again once it is back.
         const shots = await shoot().catch((e) => { if (!/context was destroyed|navigat/i.test(String(e))) throw e; return shoot(); });
         return this.look(label, { screen: label, screenshots: shots.map(jev.img),
             note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined }, questions, shots);
+    }
+
+    /**
+     * Jev's answers to `questions` about `state` you describe yourself (text, data; images built with the SDK's image()
+     * whose files are `images`): no screenshot is taken. Findings, budget and null as for t.jev().
+     */
+    async ask(label: string, state: Record<string, unknown>, questions: Record<string, any>, images: string[] = []): Promise<Record<string, any> | null> {
+        if (jev.whyOff()) return this.skipped(label, jev.whyOff());
+        return this.look(label, state, questions, images);
     }
 
     private async api(base: string, path: string, method = 'GET', body?: unknown): Promise<any> {
@@ -288,6 +371,7 @@ export class T {
     /** Closes the flow's pages. */
     async close() {
         for (const page of this.pages.values()) await page.context().close().catch(() => {});
+        for (const ctx of this.fresh) await ctx.close().catch(() => {});
     }
 }
 
@@ -322,6 +406,14 @@ export async function runFlow(flow: Loaded, r: Run, stubUrl?: string) {
     const t = new T(r, flow, stubUrl);
     let timer: NodeJS.Timeout | undefined;
     // A flow stuck on a promise that never settles would otherwise hold up every part after it.
-    const limit = new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error(`the flow didn't finish within ${flow.timeout} s (raise its timeout if it needs longer)`)), flow.timeout * 1000); });
-    try { await Promise.race([flow.run(t), limit]); } finally { clearTimeout(timer); await t.close(); }
+    const limit = new Promise<never>((_, no) => {
+        timer = setTimeout(() => {
+            const why = `the flow didn't finish within ${flow.timeout} s (raise its timeout if it needs longer)`;
+            t.kill(why); // what the abandoned run() still does is no longer recorded
+            no(new Error(why));
+        }, flow.timeout * 1000);
+    });
+    const running = flow.run(t);
+    running.catch(() => {}); // abandoned at the timeout, it ends by throwing at its next t.* call: not an unhandled rejection
+    try { await Promise.race([running, limit]); } finally { clearTimeout(timer); await t.finish(); await t.close(); }
 }

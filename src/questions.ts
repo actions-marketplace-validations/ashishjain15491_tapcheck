@@ -14,7 +14,7 @@ export const VISUAL = {
     }),
     error_shown: noul('Do `screenshots` show an error message?', {
         true: "A message says something went wrong, a request failed, a page wasn't found, or the server had an error.",
-        false: 'No error message is shown. An empty state such as "Nothing here yet" or a hint under a field is not an error.',
+        false: 'No error message is shown. An empty state such as "Nothing here yet", a hint under a field, or a notice about the data (a check that found nothing yet, a limit nearly reached) is not an error.',
     }),
     overlap: noul('In `screenshots`, do any texts or controls overlap each other?', {
         true: 'Two pieces of text, or text and a control, are drawn on top of each other so part of one is hidden or hard to read.',

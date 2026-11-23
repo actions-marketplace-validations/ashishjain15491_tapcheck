@@ -54,7 +54,12 @@ The first version. Not yet published to npm.
   marks `auth`. Stopping the app stops what `app.start` left running in the background too, and `app.stop` runs only
   when tapcheck started the app. The setup skill has a step for what the app needs around it: outside services,
   background work, build and seed. A page load that fails (a timeout on a busy app, an aborted
-  navigation) is tried once more before it counts.
+  navigation) is tried once more before it counts. Flows: a flow past its timeout records nothing more, `t.signal` is
+  aborted and `t.cleanup(fn)` callbacks run; each step prints a line as it ends; `t.ask` (Jev about text, on the
+  budget), `t.reach`, `t.page({ fresh: true })`, `t.dir` and a failing `t.note`; `t.goto` notices an ended session;
+  `VISUAL` and `EMAIL` are exported; a Jev request is capped at 120 s and retried once, and an outage is a warning;
+  with a dialog open `t.jev` looks at the screen only; failure screenshots are numbered so long names can't overwrite
+  each other. The visual "error shown" question no longer counts a notice about the data as an error.
   `browser.args` passes extra switches to the run's Chromium (an app on localhost whose sandboxed preview frames load
   its own files needs `--disable-features=LocalNetworkAccessChecks`). A side whose sign-in fails says so in the terminal, not only in the report.
   Waiting for a page to settle is capped outside the page, so a page whose own timers never fire (one

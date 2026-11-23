@@ -27,6 +27,8 @@ const IMAGES = { 'TypeSafe-Danger-Zone-Images': 'true' };
 /** The part of the TypeSafe client this file uses, so a self-check can put a fake in its place. */
 export type Client = { systemOne(req: { state: any; questions: Record<string, any>; model?: string }): Promise<{ answers: any; usage: { input_tokens: number | null } }> };
 export class BudgetReached extends Error {}
+/** Jev failed or didn't answer twice: the caller may carry on without its answers. */
+export class Unavailable extends Error {}
 
 /** The key from the environment, else from a TYPESAFE_API_KEY= line in ./.env; undefined when there is none. */
 export function apiKey(): string | undefined {
@@ -67,7 +69,14 @@ export async function ask(label: string, state: unknown, questions: Record<strin
         client = new TypeSafeClient({ apiKey: key, defaultHeaders: { ...IMAGES, ...opts.headers } });
     }
     const t0 = Date.now();
-    const r = await client.systemOne({ state, questions, ...(model ? { model } : {}) });
+    // A request that hangs or fails is tried once more; a second failure is the caller's to report.
+    const once = () => {
+        let timer: NodeJS.Timeout | undefined;
+        const cap = new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error('Jev did not answer within 120 s')), 120_000); });
+        return Promise.race([client!.systemOne({ state, questions, ...(model ? { model } : {}) }), cap]).finally(() => clearTimeout(timer));
+    };
+    const r = await once().catch(async () => { await new Promise((done) => setTimeout(done, 2000)); return once(); })
+        .catch((e: Error) => { throw new Unavailable(String(e?.message ?? e)); });
     const took = Date.now() - t0;
     calls++; ms += took;
     tokens += r.usage.input_tokens ?? 0;

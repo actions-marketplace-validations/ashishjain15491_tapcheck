@@ -3,10 +3,12 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { closeBrowser, type Run } from '../src/browser.ts';
 import { check } from '../src/config.ts';
 import { loadFlows, runFlow } from '../src/flow.ts';
+import * as jev from '../src/jev.ts';
 import type { Finding } from '../src/report.ts';
 import { start } from '../src/stub.ts';
 
@@ -105,7 +107,7 @@ export default {
     ], JSON.stringify(found, null, 1));
     assert.equal(found[0].detail, 'typed roses');
     assert.equal(found[1].detail, 'no "Saved" message after Save · console: save failed: no handler');
-    assert.deepEqual(found[1].evidence, [`${tmp}/shots/flow-ask-a-question-saving_shows_a_confirmation.png`]);
+    assert.deepEqual(found[1].evidence, [`${tmp}/shots/flow-ask-a-question-001-saving_shows_a_confirmation.png`]); // numbered: long names can't overwrite each other
     assert.ok(existsSync(found[1].evidence![0]));
     assert.equal(found.find((f) => f.status === 'warn')!.detail, 'no way to undo it on screen');
     const q = 'query=to%3A%22ada%40example.com%22%20subject%3A%22Confirm%22';
@@ -136,6 +138,58 @@ test('flows: one that never settles fails at its timeout, a bad timeout is refus
     const [flow] = await loadFlows(cfg);
     const r = { cfg, side: cfg.sides[0], dir, record: () => {}, crawl: { pages: [], hits: [], done: false } } as unknown as Run;
     await assert.rejects(runFlow(flow, r), /didn't finish within 0.2 s/);
+
+    // Past its timeout a flow's findings are dropped, t.signal is aborted, and its cleanups run.
+    const seen: string[] = [];
+    const g = globalThis as { cleaned?: boolean; aborted?: boolean };
+    writeFileSync(`${dir}/late.flow.js`, `export default { name: 'Late', timeout: 0.2, run: async (t) => {
+        t.cleanup(async () => { await t.step('put back', async () => {}); globalThis.cleaned = true; }); // t.* still works in a cleanup
+        t.note('before', 'in time', 'info');
+        await new Promise((done) => setTimeout(done, 400));
+        globalThis.aborted = t.signal.aborted;
+        t.note('after', 'too late', 'fail');
+        await t.step('late step', async () => {});
+    } };\n`);
+    const [late] = await loadFlows(check({ baseUrl: 'http://127.0.0.1:1', flows: ['late.flow.js'] }, dir));
+    const rl = { ...r, record: (f: Finding) => seen.push(f.check) } as unknown as Run;
+    await assert.rejects(runFlow(late, rl), /didn't finish within 0.2 s/);
+    assert.equal(g.cleaned, true, 'the cleanup ran at the timeout');
+    await new Promise((done) => setTimeout(done, 400));
+    assert.equal(g.aborted, true);
+    assert.deepEqual(seen, ['before', 'put back']); // nothing the abandoned run() did after the timeout
     writeFileSync(`${dir}/bad.flow.js`, "export default { name: 'Bad', timeout: 'soon', run: async () => {} };\n");
     await assert.rejects(loadFlows(check({ baseUrl: 'http://127.0.0.1:1', flows: ['bad.flow.js'] }, dir)), /timeout must be a number of seconds/);
+});
+
+test('flows: t.ask asks Jev about text, t.reach counts a request, a Jev outage is a warning, t.note can fail', async () => {
+    const dir = mkdtempSync(`${tmpdir()}/tapcheck-flow-ask-`);
+    writeFileSync(`${dir}/ask.flow.js`, `import { noul } from '${resolve('src/flow.ts')}';
+export default { name: 'Ask', run: async (t) => {
+    await t.ask('the diff', { diff: 'adds a guard' }, { risky: noul('Is \`diff\` risky?') });
+    t.reach('post', '/api/things?x=1');
+    t.reach('GET', 'https://api.stripe.com/v1/charges'); // not the app's host: not counted
+    await t.ask('down', { x: 1 }, { ok: noul('Is it fine?') });
+    t.note('own check', 'went wrong', 'fail');
+    t.expect(t.dir === '${dir}', 'dir');
+} };\n`);
+    const cfg = check({ baseUrl: 'http://127.0.0.1:1', flows: ['ask.flow.js'] }, dir);
+    const [flow] = await loadFlows(cfg);
+    const found: Finding[] = [];
+    const r = { cfg, side: cfg.sides[0], dir, record: (f: Finding) => found.push(f), crawl: { pages: [], hits: [], done: false }, part: flow.part } as unknown as Run;
+    let n = 0;
+    jev.setup(cfg.jev, { systemOne: async (req) => {
+        if ('ok' in req.questions) throw new Error('503 from Jev');
+        n++;
+        return { answers: { risky: { noul: 0.9 } }, usage: { input_tokens: 10 } };
+    } });
+    const off = process.env.JEV; delete process.env.JEV;
+    try { await runFlow(flow, r); } finally { if (off !== undefined) process.env.JEV = off; }
+    assert.equal(n, 1);
+    assert.deepEqual(found.map((f) => [f.where, f.check, f.status]), [
+        ['Ask › the diff', 'jev: risky', 'pass'],
+        ['Ask › down', "Jev's look", 'warn'],
+        ['Ask', 'own check', 'fail'],
+    ]);
+    assert.match(found[1].detail!, /503 from Jev/);
+    assert.deepEqual(r.reached, [{ part: flow.part, what: 'POST /api/things' }]);
 });

@@ -148,14 +148,15 @@ const label = (p: Part) => (p.suite === 'flow' ? p.name : p.suite);
 /** Runs one part; what it throws becomes a failing finding of its own and is returned. */
 async function runPart(p: Part, rec: Run['record'], fn: () => Promise<void>): Promise<unknown> {
     const t0 = Date.now();
-    process.stdout.write(`  ${label(p)}… `);
+    const flow = p.suite === 'flow'; // a flow prints a line per step under its name
+    process.stdout.write(`  ${label(p)}…${flow ? '\n' : ' '}`);
     ran.push(p);
     try {
         await fn();
-        console.log(`done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+        console.log(`${flow ? '  ' : ''}done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
     } catch (e) {
         const msg = (e as Error).message;
-        console.log(`stopped: ${msg}`);
+        console.log(`${flow ? '  ' : ''}stopped: ${msg}`);
         rec({ suite: findingSuite(p), where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
         return e;
     }
