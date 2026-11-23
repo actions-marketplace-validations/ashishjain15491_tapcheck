@@ -155,8 +155,15 @@ export function guard(r: Run, requested: string, landed: string) {
     }
 }
 
+/** Opens a page of the app and waits for it to settle. A load that fails (a timeout on a busy app, a navigation
+ * aborted or cut short by another) is tried once more before the error counts; a download is not a page and isn't. */
 export async function open(r: Run, page: Page, path: string) {
-    const res = await page.goto(abs(r, path), { waitUntil: 'domcontentloaded' });
+    const go = () => page.goto(abs(r, path), { waitUntil: 'domcontentloaded' });
+    const res = await go().catch(async (e: Error) => {
+        if (/Download is starting/.test(e.message)) throw e;
+        await page.waitForTimeout(1000);
+        return go();
+    });
     await settle(page);
     guard(r, path, page.url());
     return res;

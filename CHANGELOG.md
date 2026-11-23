@@ -53,7 +53,8 @@ The first version. Not yet published to npm.
   file (a PDF download) for what it is, not a page that answered 0, and a signed-out side skips the routes the list
   marks `auth`. Stopping the app stops what `app.start` left running in the background too, and `app.stop` runs only
   when tapcheck started the app. The setup skill has a step for what the app needs around it: outside services,
-  background work, build and seed.
+  background work, build and seed. A page load that fails (a timeout on a busy app, an aborted
+  navigation) is tried once more before it counts.
   `browser.args` passes extra switches to the run's Chromium (an app on localhost whose sandboxed preview frames load
   its own files needs `--disable-features=LocalNetworkAccessChecks`). A side whose sign-in fails says so in the terminal, not only in the report.
   Waiting for a page to settle is capped outside the page, so a page whose own timers never fire (one

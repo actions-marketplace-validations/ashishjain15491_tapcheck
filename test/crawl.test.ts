@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { after, test } from 'node:test';
-import { closeBrowser, type Run } from '../src/browser.ts';
+import { closeBrowser, context, open, type Run } from '../src/browser.ts';
 import { check } from '../src/config.ts';
 import type { Finding } from '../src/report.ts';
 import * as crawl from '../src/suites/crawl.ts';
@@ -38,4 +38,23 @@ test('crawl: the route list seeds the queue and gives route coverage', async () 
     assert.deepEqual(found.find((f) => f.check === 'route coverage'), { suite: 'crawl', where: 'routes', check: 'route coverage', status: 'info',
         detail: `3/6 GET routes reached; unreached in ${tmp}/missed-routes.json` });
     assert.deepEqual(JSON.parse(readFileSync(`${tmp}/missed-routes.json`, 'utf8')), ['/admin', '/plants/{id}/care', '/account']);
+});
+
+test('open: a page load that fails once is tried again', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-open-`);
+    let tries = 0;
+    const server = createServer((req, res) => {
+        if (req.url === '/flaky' && ++tries === 1) return req.socket.destroy(); // the first answer never comes
+        res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>t</title><h1>ok</h1>');
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    try {
+        const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }] }, tmp);
+        const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: () => {}, crawl: { pages: [], hits: [], done: false } };
+        const ctx = await context(r, cfg.viewports[0]);
+        const res = await open(r, await ctx.newPage(), '/flaky');
+        assert.equal(res?.status(), 200);
+        assert.equal(tries, 2);
+        await ctx.close();
+    } finally { await closeBrowser(); server.close(); }
 });
