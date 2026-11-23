@@ -38,6 +38,7 @@ export async function run(r: Run) {
     const own = host(r.side.baseUrl);
     const skip = r.cfg.crawl.skip;
     const gets = routes(r.cfg).filter((x) => x.method === 'GET' && !skip.test(x.path)); // the same list for every side
+    const signedOut = 'none' in r.side.login;
     const ctx = await context(r, r.cfg.viewports[0]);
     const page = await ctx.newPage();
     let current = '';
@@ -47,7 +48,8 @@ export async function run(r: Run) {
     const queue = (seeds.length ? seeds : ['/']).map((path) => ({ path, depth: 0, route: false }));
     const seen = new Set(queue.map((q) => q.path));
     // The routes fill what the links leave of crawl.max: links first, so a long route list can't crowd them out.
-    const fill = gets.filter((x) => !hasParams(x.path) && !seen.has(x.path)).map((x) => ({ path: x.path, depth: 0, route: true }));
+    // A signed-out side skips the routes the list marks as needing sign-in: each would only redirect to it.
+    const fill = gets.filter((x) => !hasParams(x.path) && !seen.has(x.path) && !(signedOut && x.auth)).map((x) => ({ path: x.path, depth: 0, route: true }));
     let visits = 0;
     const linkStatus = new Map<string, number>();
 
@@ -61,7 +63,9 @@ export async function run(r: Run) {
             current = path;
             errors.length = 0;
             const t0 = Date.now();
-            const res = await page.goto(abs(r, path), { waitUntil: 'domcontentloaded' }).catch(() => null);
+            let download = false; // a link to a file (a PDF invoice): Playwright downloads it and goto throws
+            const res = await page.goto(abs(r, path), { waitUntil: 'domcontentloaded' }).catch((e: Error) => { download = /Download is starting/.test(e.message); return null; });
+            if (download) continue; // not a page; "in-app links answer" still checks that it answers
             await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
             const ms = Date.now() - t0;
             const finalPath = new URL(page.url()).pathname;

@@ -84,7 +84,9 @@ async function startApp(cfg: Config): Promise<ChildProcess | null> {
     if (await answers(ready)) return null;
     if (!cfg.app.start) throw new Error(`The app isn't answering at ${ready}, and tapcheck.yml has no app.start to start it.`);
     console.log(`Starting the app: ${cfg.app.start}`);
-    const child = spawn('/bin/sh', ['-c', cfg.app.start], { stdio: 'inherit', detached: true });
+    // `wait` keeps the shell alive while anything it started in the background runs, so stopApp can stop that whole
+    // process group, and its id can't be reused by an unrelated one meanwhile.
+    const child = spawn('/bin/sh', ['-c', `${cfg.app.start}\nwait`], { stdio: 'inherit', detached: true });
     const until = Date.now() + cfg.app.timeout * 1000;
     while (Date.now() < until) {
         if (await answers(ready)) return child;
@@ -94,9 +96,12 @@ async function startApp(cfg: Config): Promise<ChildProcess | null> {
     throw new Error(`The app didn't answer at ${ready} within ${cfg.app.timeout} s of app.start.`);
 }
 
+/** Stops what app.start started, nothing when the app was already up: app.stop, then the whole process group,
+ * background workers included. */
 function stopApp(cfg: Config, child: ChildProcess | null) {
+    if (!child?.pid) return;
     if (cfg.app.stop) { try { execSync(cfg.app.stop, { stdio: 'inherit', shell: '/bin/sh' }); } catch { /* reported by the command itself */ } }
-    if (child?.pid && child.exitCode === null) { try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already gone */ } }
+    if (child.exitCode === null) { try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already gone */ } }
 }
 
 const configFile = process.env.TAPCHECK_CONFIG ?? 'tapcheck.yml';

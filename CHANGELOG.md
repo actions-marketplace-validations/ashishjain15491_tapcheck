@@ -49,7 +49,11 @@ The first version. Not yet published to npm.
   when none does), and a side can have its own `csrf`. Flows get `t.note(name, detail, 'warn' | 'info')` and a `timeout` (default 3600 s), so a flow that hangs fails instead
   of stalling the run. A step that returns `{ warn: '…' }` is recorded as a warning, and `t.mail` has `count()` and
   `all()`, with each message's `id` and `headers` (for checks such as List-Unsubscribe on every email of a send).
-  `t.jev()` waits for the page to settle and looks again when the page reloads under it.
+  `t.jev()` waits for the page to settle and looks again when the page reloads under it. The crawl takes a link to a
+  file (a PDF download) for what it is, not a page that answered 0, and a signed-out side skips the routes the list
+  marks `auth`. Stopping the app stops what `app.start` left running in the background too, and `app.stop` runs only
+  when tapcheck started the app. The setup skill has a step for what the app needs around it: outside services,
+  background work, build and seed.
   `browser.args` passes extra switches to the run's Chromium (an app on localhost whose sandboxed preview frames load
   its own files needs `--disable-features=LocalNetworkAccessChecks`). A side whose sign-in fails says so in the terminal, not only in the report.
   Waiting for a page to settle is capped outside the page, so a page whose own timers never fire (one

@@ -20,10 +20,10 @@ baseUrl: http://127.0.0.1:8000      # http(s) URL of the running app
 
 app:
   start: npm run dev                # run through /bin/sh unless the app already answers at `ready`; its whole process group is stopped after the run
-  stop: docker compose down         # optional extra command after the run
+  stop: docker compose down         # optional; runs after the run, only when tapcheck started the app
   ready: /                          # default /. Any answer with a status under 500 counts as up
   timeout: 120                      # seconds to wait for `ready` (default 120)
-  reset: ./bin/reset-test-db        # runs first when RESET=1; refused unless baseUrl is localhost, 127.0.0.1, *.localhost or *.test
+  reset: ./bin/reset-test-db        # runs with RESET=1, once the app answers at `ready`; refused unless baseUrl is localhost, 127.0.0.1, *.localhost or *.test
   resetWhen: ["database/**"]        # optional globs (paths from the git root): `reset` also runs by itself, see below
   allowRemoteReset: false           # true lifts that refusal; only for a remote throwaway copy
 
@@ -206,6 +206,9 @@ the app and sets `TAPCHECK_STUB_URL` (`http://127.0.0.1:<port>`), which `app.sta
 app:
   start: PAYMENTS_BASE_URL=$TAPCHECK_STUB_URL/api.example.com npm start
 ```
+
+An app that already sends every outside call to one address and keeps the original `Host` header (or sets
+`X-Forwarded-Host`) works too: point that setting at the stub, and `host:` rules match on the header.
 
 Only add a stub when the app reads those base URLs from the environment or its config. If a base URL is hard-coded,
 say so to the user instead of changing the app during setup.

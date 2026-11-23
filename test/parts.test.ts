@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -86,6 +89,54 @@ test('cli: LIST shows the code and flow parts; a code-only run starts no app and
     const out = execFileSync('sh', ['-c', 'cat .tapcheck/run-*/findings.json'], { cwd, encoding: 'utf8' });
     assert.deepEqual(JSON.parse(out).map((f: any) => [f.suite, f.side, f.check, f.status, f.detail]),
         [['code', '', 'sees the stub', 'pass', undefined], ['code', '', 'lint', 'fail', 'exit 1: two problems']]);
+});
+
+test('cli: the app is stopped with the workers its start left behind, and app.stop runs only after tapcheck started it', async () => {
+    const cwd = mkdtempSync(`${tmpdir()}/tapcheck-stop-`);
+    const free = createServer().listen(0);
+    await once(free, 'listening');
+    const port = (free.address() as AddressInfo).port;
+    free.close();
+    const serverJs = `require('http').createServer((q, s) => s.end('<title>t</title>')).listen(${port})`;
+    // The start command returns at once, leaving the server and a "worker" in the background.
+    writeFileSync(`${cwd}/tapcheck.yml`, [
+        `baseUrl: http://127.0.0.1:${port}`,
+        `app: { start: "sleep 300 & echo $! > worker.pid; node -e \\"${serverJs}\\" &", stop: "touch stopped.txt", timeout: 20 }`,
+        'crawl: { max: 1 }',
+    ].join('\n'));
+    const cli = () => spawnSync(process.execPath, [resolve('src/cli.ts')], { cwd, encoding: 'utf8', env: { ...process.env, JEV: 'off', ONLY: 'crawl-public' }, timeout: 120_000 }); // a leaked child would hold stdout open
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const up = async () => {
+        for (const until = Date.now() + 10_000; Date.now() < until; await new Promise((r) => setTimeout(r, 100))) {
+            if (await fetch(`http://127.0.0.1:${port}/`).then(() => true, () => false)) return;
+        }
+        throw new Error(`nothing answered on ${port}`);
+    };
+
+    let worker = 0;
+    try {
+        const first = cli();
+        assert.match(first.stdout, /Starting the app/, first.stderr);
+        worker = Number(readFileSync(`${cwd}/worker.pid`, 'utf8'));
+        await new Promise((r) => setTimeout(r, 300));
+        assert.ok(!alive(worker), 'the background worker was stopped');
+        assert.ok(existsSync(`${cwd}/stopped.txt`), 'app.stop ran');
+        assert.ok(!(await fetch(`http://127.0.0.1:${port}/`).then(() => true, () => false)), 'the server was stopped');
+    } finally {
+        if (worker && alive(worker)) process.kill(worker);
+        spawnSync('sh', ['-c', `lsof -ti tcp:${port} -sTCP:LISTEN | xargs kill 2>/dev/null`]);
+    }
+
+    // Already up (started here, not by tapcheck, in its own process: spawnSync blocks this one): tapcheck neither starts nor stops it.
+    rmSync(`${cwd}/stopped.txt`);
+    const server = spawn(process.execPath, ['-e', serverJs]);
+    try {
+        await up();
+        const second = cli();
+        assert.doesNotMatch(second.stdout, /Starting the app/);
+        assert.ok(!existsSync(`${cwd}/stopped.txt`), 'app.stop did not run');
+        assert.equal(server.exitCode, null, 'the app that was already up is still running');
+    } finally { server.kill(); }
 });
 
 test('mark: a part with a failing finding of its own is not recorded, a clean one is', () => {

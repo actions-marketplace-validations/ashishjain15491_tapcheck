@@ -11,12 +11,16 @@ Use a separate environment so the run never touches the developer's own database
 ```yaml
 baseUrl: http://127.0.0.1:8010
 app:
-  start: APP_ENV=testing php artisan serve --host=127.0.0.1 --port=8010
-  ready: /up                 # Laravel 11+; on older apps use /login or /
+  start: PHP_CLI_SERVER_WORKERS=4 APP_ENV=testing php artisan serve --no-reload --host=127.0.0.1 --port=8010
+  ready: /up                 # if route:list has it; else /login or / (a 404 still counts as up, so check)
   reset: APP_ENV=testing php artisan migrate:fresh --seed --force
 ```
 
-- Run the reset command once by hand before the first run, so the tables and seeded users exist.
+- SQLite won't do when the migrations use the real database's own SQL (raw statements, row-level security) or the
+  app talks to Redis itself: run that database and Redis in Docker on their own ports instead (SKILL.md step 3).
+- If seeders or test hooks check `environment('local')` (grep `environment(`), use `APP_ENV=local` with a
+  `.env.local` (Laravel loads `.env.<APP_ENV>` in place of `.env`), and git-ignore it.
+- The first run is `RESET=1`, so the tables and seeded users exist.
 - Build the frontend first when the app uses Vite (`npm ci && npm run build`); without the manifest every page is a 500.
 - If the app needs queues, mail or a cache server, set `QUEUE_CONNECTION=sync`, `MAIL_MAILER=log` (or Mailpit, see
   below) and `CACHE_STORE=file` in `.env.testing` rather than starting more services.
