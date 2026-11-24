@@ -17,8 +17,9 @@ export type Login =
 export type Task = { name: string; from: string; goal: string; done: string; notDone: string; optimal: number; text?: string };
 /** Every suite that runs once per side, in run order. */
 export const SUITES = ['crawl', 'contract', 'security', 'a11y', 'interact', 'audit', 'ux', 'usability'] as const;
-/** Every name `changes` can key on: the suites, plus the side-less `code` part and the custom flows. */
-const CHANGE_KEYS: string[] = [...SUITES, 'code', 'flow'];
+/** The suite names `changes` can key on: the suites, plus the side-less `code` part and the custom flows. A part name
+ * (a11y-customer, flow-checkout) is a key too; the CLI checks those once the flows are loaded. */
+export const CHANGE_KEYS: string[] = [...SUITES, 'code', 'flow'];
 /** A command from the project's own toolchain: exit 0 passes; `warn` makes a non-zero exit a warning. `timeout` in seconds. */
 export type Gate = { name: string; run: string; timeout: number; warn: boolean };
 /** One canned answer of the stub server (src/stub.ts). `path` is a glob, or a regular expression when it starts with ^. */
@@ -57,6 +58,7 @@ export type Config = {
     // COVERAGE=1: where the merged coverage map goes (from the config file's folder), and the gaps that are there on purpose.
     coverage: { file: string; reasons: { match: RegExp; why: string }[] };
     flows: string[]; // globs of flow files (src/flow.ts)
+    parallel: number; // how many flows of a side run at once (PARALLEL overrides it); 1 runs them one by one
     mail: { mailpit?: string }; // Mailpit's web address, for t.mail in flows
     browser: { args: string[] }; // extra command-line switches for the run's Chromium
 };
@@ -302,11 +304,15 @@ export function check(raw: any, root = process.cwd()): Config {
     const changes = raw.changes ?? {};
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) fail('changes', 'must map a suite name (or "*") to a list of globs');
     for (const [k, globs] of Object.entries(changes)) {
-        if (k !== '*' && !CHANGE_KEYS.includes(k)) fail(`changes.${k}`, `names a suite that doesn't exist (use "*" or one of ${CHANGE_KEYS.join(', ')})`);
+        if (k !== '*' && !CHANGE_KEYS.includes(k) && !(k.startsWith('flow-') || CHANGE_KEYS.some((x) => k.startsWith(`${x}-`)))) {
+            fail(`changes.${k}`, `names a suite that doesn't exist (use "*", a part name such as flow-<name> or a11y-<side>, or one of ${CHANGE_KEYS.join(', ')})`);
+        }
         if (!Array.isArray(globs) || !globs.length) fail(`changes.${k}`, 'must be a list of globs, e.g. ["src/**"]');
         globs.forEach((g, i) => str(g, `changes.${k}[${i}]`));
     }
 
+    const parallel = process.env.PARALLEL !== undefined && process.env.PARALLEL !== '' ? Number(process.env.PARALLEL) : raw.parallel ?? 1;
+    if (!Number.isInteger(parallel) || parallel < 1 || parallel > 32) fail(process.env.PARALLEL ? 'PARALLEL (environment)' : 'parallel', 'must be a whole number from 1 to 32');
     const flows = raw.flows === undefined ? [] : Array.isArray(raw.flows) ? raw.flows : [raw.flows];
     flows.forEach((g: unknown, i: number) => str(g, Array.isArray(raw.flows) ? `flows[${i}]` : 'flows'));
     if (raw.mail !== undefined && (!raw.mail || typeof raw.mail !== 'object')) fail('mail', 'must be {mailpit: <the address of Mailpit\'s web page>}');
@@ -315,7 +321,7 @@ export function check(raw: any, root = process.cwd()): Config {
     if ((raw.browser !== undefined && (!raw.browser || typeof raw.browser !== 'object' || Array.isArray(raw.browser))) || !Array.isArray(args) || args.some((a: unknown) => typeof a !== 'string' || !a.startsWith('--')))
         fail('browser', 'must be {args: ["--a-chromium-switch", …]}');
 
-    return { root, baseUrl, app, sides, changes, browser: { args }, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows,
+    return { root, baseUrl, app, sides, changes, browser: { args }, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows, parallel,
         mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
         crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, interact: { max: interactMax, submit: it.submit === true },

@@ -153,9 +153,9 @@
             }
         },
         "changes": {
-            "description": "For CHANGED=1: which files each suite depends on, as globs on paths from the git root. \"*\" adds to every suite; a suite with no globs reruns on any change.",
+            "description": "For CHANGED=1 and CHANGED=<git ref>: which files each part or suite depends on, as globs on paths from the git root. A part name (flow-checkout, a11y-customer) wins over its suite; \"*\" adds to every part; a part with no globs reruns on any change.",
             "type": "object",
-            "propertyNames": { "enum": ["*", "crawl", "contract", "security", "a11y", "interact", "audit", "ux", "usability", "code", "flow"] },
+            "propertyNames": { "pattern": "^\\*$|^(crawl|contract|security|a11y|interact|audit|ux|usability|code|flow)(-.+)?$" },
             "additionalProperties": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/text" } },
             "default": {}
         },
@@ -249,6 +249,10 @@
                     "default": []
                 }
             }
+        },
+        "parallel": {
+            "description": "How many flows of a side run at once (PARALLEL=<n> overrides it). A flow with serial: true runs alone; the suites run one by one either way. The app must handle that many users at once.",
+            "type": "integer", "minimum": 1, "maximum": 32, "default": 1
         },
         "flows": {
             "description": "Globs of flow files (TypeScript or JavaScript); each file is its own part, flow-<name>. Flows may change data.",

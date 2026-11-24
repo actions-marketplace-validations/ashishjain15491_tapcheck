@@ -31,7 +31,7 @@ everything else runs.
 ## Four ways to run it
 
 All four run the same CLI from the folder that holds `tapcheck.yml`, and take the same options as environment
-variables (`ONLY=a11y`, `SKIP=jev`, `CHANGED=1`, `JEV=off`, `LIST=1`; the full list is in
+variables (`ONLY=a11y`, `SKIP=jev`, `CHANGED=1`, `CHANGED=origin/main`, `PARALLEL=4`, `JEV=off`, `LIST=1`; the full list is in
 [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run)).
 
 ### 1. As a plugin for Claude Code and Codex
@@ -94,8 +94,10 @@ jobs:
 The action installs tapcheck and Chromium, runs it, adds `REPORT.md` to the job summary, uploads the run folder as
 the artifact `tapcheck-report`, and fails the step when a check fails. It doesn't comment on the pull request: that
 needs write permissions, and the summary and artifact need none. `changed: true` needs `.tapcheck/state.json` from
-an earlier run (restore it with `actions/cache`) and a checkout with history. Inputs are described in
-[action.yml](action.yml).
+an earlier run (restore it with `actions/cache`) and a checkout with history. `changed: base` is QA for one pull
+request: it runs only the parts whose files (by `changes:` in `tapcheck.yml`) the pull request changed, compared with
+its base branch, and needs `actions/checkout` with `fetch-depth: 0`. Locally the same is
+`gh pr checkout <number> && CHANGED=origin/main tapcheck`. Inputs are described in [action.yml](action.yml).
 
 ## A minimal tapcheck.yml
 

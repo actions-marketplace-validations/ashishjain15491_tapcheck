@@ -28,6 +28,7 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 | The user wants | Run |
 |---|---|
 | nothing specific, or "check my changes" (default) | `CHANGED=1 TAPCHECK` |
+| QA for a pull request or a branch: "test PR 42", "what does this branch break" | `CHANGED=origin/<base> TAPCHECK` on the PR's code (below) |
 | everything, a full audit, a release check | `TAPCHECK` |
 | one area: "accessibility", "security", "the admin side" | `ONLY=a11y TAPCHECK`, `ONLY=security TAPCHECK`, `ONLY=admin TAPCHECK` |
 | "do the buttons, dialogs and tables work", "click through everything" | `ONLY=interact TAPCHECK` (brings its side's crawl) |
@@ -41,6 +42,16 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 - `CHANGED=1` runs, of the chosen parts, those whose files changed since each last passed, and any that never
   passed. It needs a git repository. "Nothing to run" means nothing relevant changed: say so, and offer a full run.
   It combines with `ONLY` and `SKIP`.
+- `CHANGED=<git ref>` runs the parts whose files changed since the branch point with that ref: a pull request's own
+  changes, committed or not, whatever ran before. For a PR by number, get its code first: if the working tree has
+  uncommitted changes, ask before switching; otherwise `gh pr checkout <number>`, take the base from
+  `gh pr view <number> --json baseRefName -q .baseRefName`, `git fetch origin <base>`, and run
+  `CHANGED=origin/<base> TAPCHECK`. Say which parts ran and why (the files the PR changed), and switch back to the
+  user's branch afterwards. Parts that fail here may have failed before the PR too: when one does, say so only after
+  checking it on the base branch, or say you didn't.
+- Many flows and a long run: `PARALLEL=4 TAPCHECK` runs four flows of a side at once (flows with `serial: true` run
+  alone). Use it only if the flows each make their own data and the app takes several users at once; if steps that
+  pass one at a time fail together, say so and rerun those flows without it.
 - `contract`, `security` and `interact` read the crawl, so choosing them brings their side's `crawl` along.
 - `interact` clicks every control that isn't labelled as destructive and isn't a POST form's submit button. Run it
   against test data. If `tapcheck.yml` has `interact.submit: true` it also submits dialog forms and changes data:

@@ -1,7 +1,7 @@
 /*
  * Parts: every suite on every side is one part, named <suite>-<side>; the code gates are one part with no side, `code`;
  * every custom flow is a part on its side, flow-<name>. Here: build them, pick some by name or tag (ONLY, SKIP), find the
- * ones whose files changed since they last passed (CHANGED=1), and record the ones that passed.
+ * ones whose files changed since they last passed (CHANGED=1) or since a git ref (CHANGED=<ref>), and record the ones that passed.
  */
 import { execFileSync } from 'node:child_process';
 import { matchesGlob, posix, relative, resolve } from 'node:path';
@@ -42,6 +42,23 @@ export const withNeeds = (parts: Part[], chosen: Part[]): Part[] => {
     return parts.filter((p) => names.has(p.name));
 };
 
+/**
+ * Runs `run` on each item, at most `n` at a time, starting them in order. An item `alone` says is alone waits for the
+ * running ones to end and ends before the next starts. Once `stopped()` is true no more start. `run` must not reject.
+ */
+export async function pool<T>(items: T[], n: number, alone: (x: T) => boolean, run: (x: T) => Promise<void>, stopped = () => false): Promise<void> {
+    const running = new Set<Promise<void>>();
+    for (const x of items) {
+        if (alone(x)) await Promise.all(running);
+        while (running.size >= n) await Promise.race(running);
+        if (stopped()) break;
+        const p: Promise<void> = run(x).finally(() => running.delete(p));
+        running.add(p);
+        if (alone(x)) await p;
+    }
+    await Promise.all(running);
+}
+
 // ── git: the only place it is called ──
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const untracked = (cwd: string) => git(cwd, 'ls-files', '--others', '--exclude-standard', '--full-name', '--', ':/').split('\n').filter(Boolean);
@@ -73,28 +90,42 @@ export function resetDue(state: State, globs: string[], cwd = process.cwd()): st
 }
 
 /**
- * CHANGED=1: of `chosen`, the parts whose files changed since each last passed. `changes` maps a suite (or "*") to the
- * globs it depends on; a suite with none reruns on any change, and a change to the `config` file reruns everything.
- * Files under `out` (tapcheck's own output) never count. `config` and `out` are paths from `cwd`.
+ * CHANGED=1: of `chosen`, the parts whose files changed since each last passed. With `at.base` (CHANGED=<git ref>), the
+ * files changed since the branch point with that ref instead, the same for every part and with no state needed: a pull
+ * request's own changes, committed or not. `changes` maps a part name, a suite or "*" to the globs it depends on; a
+ * part's own name wins over its suite, "*" adds to both, a part with none reruns on any change, and a change to the
+ * `config` file reruns everything. Files under `out` (tapcheck's own output) never count. `config` and `out` are paths from `cwd`.
  */
-export function changedParts(chosen: Part[], state: State, changes: Record<string, string[]>, at: { config: string; out: string; cwd?: string }): Part[] {
+export function changedParts(chosen: Part[], state: State, changes: Record<string, string[]>, at: { config: string; out: string; cwd?: string; base?: string }): Part[] {
     const cwd = at.cwd ?? process.cwd();
     let prefix: string;
     try { git(cwd, 'rev-parse', 'HEAD'); prefix = git(cwd, 'rev-parse', '--show-prefix'); } catch {
-        throw new Error('CHANGED=1 needs a git repository with at least one commit here: it compares files with the last passing run.');
+        throw new Error(`CHANGED=${at.base ?? 1} needs a git repository with at least one commit here: it compares files with ${at.base ? 'that ref' : 'the last passing run'}.`);
     }
     const fromRoot = (file: string) => posix.normalize(prefix + relative(cwd, resolve(cwd, file)));
     const config = fromRoot(at.config), out = fromRoot(at.out) + '/';
     const now = untracked(cwd), diffs = new Map<string, string[] | null>(); // parts that passed together share a snapshot
+    let sinceBase: string[] | undefined;
+    if (at.base) {
+        let fork: string;
+        try { fork = git(cwd, 'merge-base', at.base, 'HEAD'); } catch {
+            throw new Error(`CHANGED=${at.base}: git finds no commit shared by ${at.base} and HEAD. Fetch it first (git fetch origin <branch>); in CI, check out with full history (fetch-depth: 0).`);
+        }
+        sinceBase = [...(diff(cwd, fork) ?? []), ...now];
+    }
     return chosen.filter((p) => {
-        const s = state.parts[p.name]; // none: it never passed
-        if (s && !diffs.has(s.snapshot)) diffs.set(s.snapshot, diff(cwd, s.snapshot));
-        const tracked = s && diffs.get(s.snapshot);
-        if (!s || !tracked) return true;
-        // ponytail: an untracked file edited again since the snapshot isn't seen (only new ones are); hash them if that bites.
-        const files = [...tracked, ...now.filter((f) => !s.untracked.includes(f))].filter((f) => !f.startsWith(out));
+        let files = sinceBase;
+        if (!files) {
+            const s = state.parts[p.name]; // none: it never passed
+            if (s && !diffs.has(s.snapshot)) diffs.set(s.snapshot, diff(cwd, s.snapshot));
+            const tracked = s && diffs.get(s.snapshot);
+            if (!s || !tracked) return true;
+            // ponytail: an untracked file edited again since the snapshot isn't seen (only new ones are); hash them if that bites.
+            files = [...tracked, ...now.filter((f) => !s.untracked.includes(f))];
+        }
+        files = files.filter((f) => !f.startsWith(out));
         if (files.includes(config)) return true;
-        const globs = [...(changes[p.suite] ?? []), ...(changes['*'] ?? [])];
+        const globs = [...(changes[p.name] ?? changes[p.suite] ?? []), ...(changes['*'] ?? [])];
         return globs.length ? files.some((f) => globs.some((g) => matchesGlob(f, g))) : files.length > 0;
     });
 }

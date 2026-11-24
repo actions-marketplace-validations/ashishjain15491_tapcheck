@@ -18,6 +18,7 @@ export type Run = {
     part?: string; // the part running now, and inside a flow its step: what a recording and a reached route are filed under
     step?: string;
     reached?: Reach[]; // what the run touched, for hits.json and the coverage map (src/coverage.ts)
+    prefix?: string; // printed before each of a flow's step lines when flows run in parallel: "[flow-checkout] "
 };
 /** One thing a part touched: "GET /orders", "dialog <name>", "table <headers>: sort". */
 export type Reach = { part: string; step?: string; what: string };

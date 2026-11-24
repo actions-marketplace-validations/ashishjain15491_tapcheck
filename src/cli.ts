@@ -15,7 +15,11 @@
  *   ONLY=crawl,a11y tapcheck        only these parts: part names or tags, comma-separated; a trailing * matches name prefixes
  *   ONLY=customer SKIP=jev tapcheck SKIP takes parts out again (contract, security and interact still bring their side's crawl)
  *   CHANGED=1 tapcheck              of the chosen parts, only those whose files changed since each last passed (needs git;
- *                                   `changes:` in tapcheck.yml says which files count for which suite)
+ *                                   `changes:` in tapcheck.yml says which files count for which part or suite)
+ *   CHANGED=origin/main tapcheck    the same, but files changed since the branch point with that git ref: QA for a pull
+ *                                   request's own changes, with no state from earlier runs
+ *   PARALLEL=4 tapcheck             run up to 4 flows of a side at once (default `parallel` in tapcheck.yml, or 1); a flow
+ *                                   with `serial: true` runs alone; the suites still run one by one
  *   LIST=1 tapcheck                 print the parts and their tags, mark what would run, and exit
  *   JEV=off tapcheck                skip the suites Jev judges (ux, usability) and audit's Jev looks; also skipped when there is no key
  *   JEV_BUDGET=0.5 tapcheck         the most to spend on Jev this run, in USD (default jev.budget, or 1)
@@ -43,8 +47,8 @@
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { isLocal, load, SUITES, type Config } from './config.ts';
-import { build, changedParts, findingSuite, list, mark, resetDue, select, snapshot, withNeeds, type Part, type State } from './parts.ts';
+import { CHANGE_KEYS, isLocal, load, SUITES, type Config } from './config.ts';
+import { build, changedParts, findingSuite, list, mark, pool, resetDue, select, snapshot, withNeeds, type Part, type State } from './parts.ts';
 import { signIn } from './auth.ts';
 import { closeBrowser, countdown, launch, recordings, SessionExpired, startDelay, type Run } from './browser.ts';
 import { coverage, hits } from './coverage.ts';
@@ -121,7 +125,10 @@ const PARTS = build(cfg.sides.map((s) => s.name), { code: cfg.gates.length > 0 |
 const statePath = `${cfg.out}/state.json`;
 const state: State = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { parts: {} };
 let chosen = select(PARTS, list(process.env.ONLY), list(process.env.SKIP));
-if (process.env.CHANGED === '1') chosen = changedParts(chosen, state, cfg.changes, { config: configFile, out: cfg.out });
+const changedBase = process.env.CHANGED && !['0', '1'].includes(process.env.CHANGED) ? process.env.CHANGED : undefined;
+const unknownKeys = Object.keys(cfg.changes).filter((k) => k !== '*' && !CHANGE_KEYS.includes(k) && !PARTS.some((p) => p.name === k));
+if (unknownKeys.length) throw new Error(`changes: ${unknownKeys.join(', ')} ${unknownKeys.length > 1 ? 'are' : 'is'} not a part. Run with LIST=1 to see them.`);
+if (process.env.CHANGED === '1' || changedBase) chosen = changedParts(chosen, state, cfg.changes, { config: configFile, out: cfg.out, base: changedBase });
 chosen = withNeeds(PARTS, chosen);
 
 if (process.env.LIST === '1') {
@@ -130,7 +137,7 @@ if (process.env.LIST === '1') {
     process.exit(0);
 }
 if (!chosen.length) {
-    console.log(`Nothing to run: ${process.env.CHANGED === '1' ? 'no chosen part has changed files since it last passed.' : 'SKIP took out every chosen part.'}`);
+    console.log(`Nothing to run: ${changedBase ? `no chosen part has changed files since ${changedBase}.` : process.env.CHANGED === '1' ? 'no chosen part has changed files since it last passed.' : 'SKIP took out every chosen part.'}`);
     process.exit(0);
 }
 console.log(`Running: ${chosen.map((p) => p.name).join(', ')}`);
@@ -146,17 +153,18 @@ const notRun: Record<string, string> = {}; // parts that couldn't run, and why: 
 
 const label = (p: Part) => (p.suite === 'flow' ? p.name : p.suite);
 /** Runs one part; what it throws becomes a failing finding of its own and is returned. */
-async function runPart(p: Part, rec: Run['record'], fn: () => Promise<void>): Promise<unknown> {
+async function runPart(p: Part, rec: Run['record'], fn: () => Promise<void>, together = false): Promise<unknown> {
     const t0 = Date.now();
     const flow = p.suite === 'flow'; // a flow prints a line per step under its name
+    const end = `${flow ? '  ' : ''}${together ? `${label(p)} ` : ''}`; // flows running together: say whose end it is
     process.stdout.write(`  ${label(p)}…${flow ? '\n' : ' '}`);
     ran.push(p);
     try {
         await fn();
-        console.log(`${flow ? '  ' : ''}done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+        console.log(`${end}done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
     } catch (e) {
         const msg = (e as Error).message;
-        console.log(`${flow ? '  ' : ''}stopped: ${msg}`);
+        console.log(`${end}stopped: ${msg}`);
         rec({ suite: findingSuite(p), where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
         return e;
     }
@@ -207,7 +215,8 @@ try {
         const sideDir = `${dir}/${side.name}`;
         mkdirSync(sideDir, { recursive: true });
         console.log(`\n${side.name} at ${side.baseUrl}: ${parts.map(label).join(', ')}`);
-        const r: Run = { cfg, side, dir: sideDir, record: (f) => record({ ...f, side: side.name }), crawl: { pages: [], hits: [], done: false } };
+        // reached: one list, so the copies the flows running together get (each its own part and step) share it
+        const r: Run = { cfg, side, dir: sideDir, record: (f) => record({ ...f, side: side.name }), crawl: { pages: [], hits: [], done: false }, reached: [] };
         try {
             r.auth = await signIn(cfg, side);
         } catch (e) {
@@ -216,17 +225,27 @@ try {
             for (const p of parts) notRun[p.name] = 'sign-in failed';
             continue;
         }
-        for (const p of parts) {
-            r.part = p.name;
-            if (jevOff && p.tags.includes('jev')) { console.log(`  ${p.suite}… skipped (${jevOff})`); skipped[p.name] = jevOff; continue; }
+        let expired = false;
+        const one = async (p: Part, rp: Run, together = false) => {
+            if (jevOff && p.tags.includes('jev')) { console.log(`  ${p.suite}… skipped (${jevOff})`); skipped[p.name] = jevOff; return; }
             const flow = flows.find((f) => f.part === p.name);
-            const e = await runPart(p, r.record, () => (flow ? runFlow(flow, r, stub?.url) : RUN[p.suite as keyof typeof RUN](r)));
+            const e = await runPart(p, rp.record, () => (flow ? runFlow(flow, rp, stub?.url) : RUN[p.suite as keyof typeof RUN](rp)), together);
             if (e instanceof jev.BudgetReached) jevOff = 'Jev budget reached';
-            if (e instanceof SessionExpired) {
-                for (const q of parts.slice(parts.indexOf(p) + 1)) notRun[q.name] = 'the session expired';
-                break;
-            }
+            if (e instanceof SessionExpired) expired = true;
+        };
+        // The suites one by one, then the flows: `parallel` at a time (a serial flow alone), each with its own copy of the run.
+        const together = cfg.parallel > 1 ? parts.filter((p) => p.suite === 'flow') : [];
+        for (const p of parts.filter((q) => !together.includes(q))) {
+            if (expired) break;
+            r.part = p.name;
+            await one(p, r);
         }
+        if (together.length) {
+            console.log(`  flows, ${cfg.parallel} at a time: their step lines start with the flow's name`);
+            const alone = (p: Part) => flows.find((f) => f.part === p.name)?.serial === true;
+            await pool(together, cfg.parallel, alone, (p) => one(p, { ...r, part: p.name, step: undefined, prefix: `[${p.name}] ` }, true), () => expired);
+        }
+        if (expired) for (const q of parts) if (!ran.includes(q) && !(q.name in skipped)) notRun[q.name] = 'the session expired';
         writeFileSync(`${sideDir}/hits.json`, JSON.stringify(r.reached ?? [], null, 1));
     }
 } finally {

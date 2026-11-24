@@ -32,7 +32,10 @@ The first version. Not yet published to npm.
   simulated first-time user attempting each task, with a clickstream), with a per-run budget, a memo, and a log of
   every request. Unsure answers are warnings.
 - **Parts.** Every suite on every side is a part; `ONLY` and `SKIP` pick them by name or tag, `LIST=1` prints them,
-  `CHANGED=1` runs only the parts whose files changed since each last passed.
+  `CHANGED=1` runs only the parts whose files changed since each last passed. `CHANGED=<git ref>` (the Action's
+  `changed: base`) is QA for a pull request: the parts whose files changed since the branch point with that ref, with
+  no state needed. `changes:` also keys on a part name, so each flow can depend on its own files. `parallel: <n>`
+  (or `PARALLEL=<n>`) runs that many of a side's flows at once; a flow with `serial: true` runs alone.
 - **Your own checks.** `gates` (the project's linters and audits, as the part `code`), `routes` (route coverage and
   writing routes without sign-in), `stub` (a stand-in for outside services, with a control API) and `flows` (custom
   journeys with `t.step`, `t.stub`, `t.mail`).

@@ -180,11 +180,22 @@ A gate passes on exit 0; `warn: true` turns a failure into a warning; `timeout` 
 crawl also visits the GET routes without parameters (after the links it found, up to `crawl.max`) and reports route coverage, and `code` lists writing routes
 with `auth: false` that don't match `security.publicWrites` as a warning.
 
-## changes (for CHANGED=1)
+## changes (for `CHANGED=1` and `CHANGED=<git ref>`)
 
-Maps a suite name (`crawl`, `contract`, `security`, `a11y`, `interact`, `audit`, `ux`, `usability`, `code`, `flow`) or `"*"` (added to
-every suite) to globs on paths from the git root. A part reruns when a matching file changed since it last passed; a
-suite with no globs reruns on any change; a change to `tapcheck.yml` reruns everything. `*` and `**` don't match
+Maps a suite name (`crawl`, `contract`, `security`, `a11y`, `interact`, `audit`, `ux`, `usability`, `code`, `flow`), a
+part name (`flow-checkout`, `a11y-customer`; `LIST=1` prints them) or `"*"` (added to every part) to globs on paths
+from the git root. A part's own name wins over its suite, so one flow can depend on its own files while `flow` covers
+the rest. A part reruns when a matching file changed since it last passed (`CHANGED=1`), or since the branch point
+with a git ref (`CHANGED=origin/main`: a pull request's own changes, committed or not, with no state needed); a part
+with no globs reruns on any change; a change to `tapcheck.yml` reruns everything. A part name that doesn't exist is
+an error.
+
+```yaml
+changes:
+  "*": ["resources/css/**"]
+  flow: ["app/**", "routes/**"]                 # every flow without globs of its own
+  flow-checkout: ["app/Cart/**", "app/Payments/**"]
+``` `*` and `**` don't match
 names starting with a dot.
 
 ## stub
@@ -275,7 +286,14 @@ suites, a flow may submit forms and change data, so it belongs with `app.reset` 
 than its `timeout` (seconds in the flow's export, default 3600) fails and the run goes on: what it still does after that
 is not recorded, `t.signal` is aborted, its pages are closed, and what it handed to `t.cleanup(fn)` runs (also when it
 ends normally), so a flow that changes shared state can put it back. A cleanup that needs a page takes a new one with
-`t.page()`, since a page it captured from the flow is closed by then. Past the timeout only what a cleanup awaits itself may use `t.*`; a
+`t.page()`, since a page it captured from the flow is closed by then.
+
+`parallel: 4` (or `PARALLEL=4` for one run) runs up to four of a side's flows at once, each in its own browser
+context, starting them in file order; the suites still run one by one. It suits flows that each make their own data,
+and the app has to handle that many users at once (a PHP built-in server needs `PHP_CLI_SERVER_WORKERS`, a queue
+more than one worker). A flow that changes what others read (shared seed data, stub rules, `t.mail.clear()`) says
+`serial: true` in its export: it waits for the running flows to end and runs alone. Step lines in the terminal then
+start with the flow's part name. Default 1: one flow at a time, as before. Past the timeout only what a cleanup awaits itself may use `t.*`; a
 Playwright handler it adds (`page.on(…)`) needs `AsyncResource.bind` from `node:async_hooks` to count as the cleanup's. The file format and the `t` helpers (`t.goto`, `t.page`, `t.step`,
 `t.use`, `t.expect`, `t.note`, `t.jev`, `t.ask`, `t.reach`, `t.cleanup`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
 top of `src/flow.ts` in the tapcheck folder (`<skill base directory>/../../src/flow.ts`), with a working example in
@@ -310,8 +328,10 @@ check off for the run. The sign-in browser of a `form` login doesn't get these s
 |---|---|
 | `ONLY=crawl,a11y` | only these parts: part names or tags, comma-separated; `flow-*` style prefixes work |
 | `SKIP=jev` | take parts out again (contract, security and interact still bring their side's crawl) |
+| `PARALLEL=4` | run up to 4 flows of a side at once (overrides `parallel`); a `serial: true` flow runs alone |
 | `LIST=1` | print the parts and their tags, mark what would run, and exit |
 | `CHANGED=1` | of the chosen parts, only those whose files changed since each last passed (needs git) |
+| `CHANGED=origin/main` | of the chosen parts, only those whose files changed since the branch point with that git ref: QA for a pull request (needs the ref fetched) |
 | `JEV=off` | skip `ux`, `usability` and `audit`'s Jev looks; they are also skipped when there is no `TYPESAFE_API_KEY` |
 | `JEV_BUDGET=0.5` | most USD to spend on Jev this run (overrides `jev.budget`) |
 | `RESET=1` | run `app.reset` first |

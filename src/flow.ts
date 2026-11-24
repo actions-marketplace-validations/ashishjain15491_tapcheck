@@ -15,7 +15,8 @@
  * Each step is one finding: pass, or fail with what was thrown, a screenshot and the page's console errors (a step that
  * returns `{ warn: '…' }` is a warning instead); the flow carries on after a failed step. A flow that takes longer than
  * its `timeout` (seconds, default 3600) fails: nothing it does after that is recorded, t.signal is aborted, and what it
- * gave t.cleanup(fn) runs (as it does when the flow ends). t.note(name, detail, 'warn' | 'info' | 'fail') records a
+ * gave t.cleanup(fn) runs (as it does when the flow ends). With `parallel` above 1 a side's flows run that many at a time;
+ * `serial: true` in a flow's export runs it alone, for a flow that changes what the others read. t.note(name, detail, 'warn' | 'info' | 'fail') records a
  * finding without a step. Unlike the suites, a flow may click anything and change data: run it against a copy
  * you can reset. t.jev() and t.mail.judge() ask Jev to look at the current page or at an email; with JEV=off or no key
  * they record that they were skipped and return null, so a flow that calls them still runs everywhere.
@@ -35,8 +36,12 @@ import type { FailRule, Reply, Seen } from './stub.ts';
 /** For a flow's own questions to t.jev(), t.ask() and t.mail.judge(), and tapcheck's own sets to start from. */
 export { choice, noul, score } from '@typesafe-ai/sdk';
 export { EMAIL, VISUAL } from './questions.ts';
-/** timeout: seconds the whole flow may take (default 3600); past it the flow fails and the run goes on. */
-export type Flow = { name: string; side?: string; timeout?: number; run: (t: T) => Promise<void> };
+/**
+ * timeout: seconds the whole flow may take (default 3600); past it the flow fails and the run goes on.
+ * serial: with `parallel` above 1, this flow runs alone, after the flows before it end and before the ones after it start
+ * (for a flow that changes data the others read, stub rules or the whole Mailpit inbox).
+ */
+export type Flow = { name: string; side?: string; timeout?: number; serial?: boolean; run: (t: T) => Promise<void> };
 /** A flow as loaded: its side settled and its part name. */
 export type Loaded = Required<Flow> & { part: string };
 /** One message in Mailpit. headers: every header by name, as Mailpit spells it ("List-Unsubscribe"), each with its values. */
@@ -181,7 +186,7 @@ export class T {
         if (errors) errors.length = 0;
         const base = { suite: this.flow.part, where: this.flow.name, check: name };
         const t0 = Date.now();
-        const done = (mark: string) => { if (this.live()) process.stdout.write(`    ${mark} ${name} (${((Date.now() - t0) / 1000).toFixed(1)} s)\n`); }; // progress, one line a step
+        const done = (mark: string) => { if (this.live()) process.stdout.write(`    ${this.r.prefix ?? ''}${mark} ${name} (${((Date.now() - t0) / 1000).toFixed(1)} s)\n`); }; // progress, one line a step
         this.r.step = name; // what the step reaches is filed under it (hits.json)
         try {
             const out = await fn();
@@ -433,9 +438,10 @@ export async function loadFlows(cfg: Config): Promise<Loaded[]> {
             const side = f.side ?? cfg.sides[0].name;
             if (!cfg.sides.some((s) => s.name === side)) throw new Error(`${file}: side "${side}" isn't in sides (${cfg.sides.map((s) => s.name).join(', ')}).`);
             if (f.timeout !== undefined && !(Number.isFinite(f.timeout) && f.timeout > 0)) throw new Error(`${file}: timeout must be a number of seconds above 0.`);
+            if (f.serial !== undefined && typeof f.serial !== 'boolean') throw new Error(`${file}: serial must be true or false.`);
             const part = `flow-${slug(f.name).replace(/_/g, '-')}`;
             if (out.some((o) => o.part === part)) throw new Error(`${file}: another flow is already called "${f.name}" (part ${part}).`);
-            out.push({ name: f.name, side, timeout: f.timeout ?? 3600, run: f.run, part });
+            out.push({ name: f.name, side, timeout: f.timeout ?? 3600, serial: f.serial ?? false, run: f.run, part });
         }
     }
     return out;

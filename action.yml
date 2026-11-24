@@ -25,7 +25,7 @@ inputs:
     description: Parts or tags to leave out, comma-separated (jev, flow, usability).
     default: ''
   changed:
-    description: 'true runs only the parts whose files changed since each last passed. It needs the state file from an earlier run (<out>/state.json, restored with actions/cache) and a checkout with history; without the state file every part runs.'
+    description: 'true runs only the parts whose files changed since each last passed. It needs the state file from an earlier run (<out>/state.json, restored with actions/cache) and a checkout with history; without the state file every part runs. base runs only the parts whose files the pull request changed, compared with its base branch (fetched if missing; check out with fetch-depth: 0). Any other value is a git ref to compare with the same way.'
     default: 'false'
   jev-budget:
     description: The most to spend on Jev in this run, in US dollars. Empty uses jev.budget from the config (default 1).
@@ -68,7 +68,15 @@ runs:
         INPUT_CHANGED: ${{ inputs.changed }}
         INPUT_JEV_BUDGET: ${{ inputs.jev-budget }}
       run: |
-        if [ "$INPUT_CHANGED" = "true" ]; then export CHANGED=1; fi
+        case "$INPUT_CHANGED" in
+          true) export CHANGED=1 ;;
+          false|'') ;;
+          base)
+            if [ -z "$GITHUB_BASE_REF" ]; then echo "changed: base works only on a pull_request event"; exit 2; fi
+            git rev-parse --verify -q "origin/$GITHUB_BASE_REF" >/dev/null || git fetch --no-tags -q origin "$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+            export CHANGED="origin/$GITHUB_BASE_REF" ;;
+          *) export CHANGED="$INPUT_CHANGED" ;;
+        esac
         if [ -n "$INPUT_JEV_BUDGET" ]; then export JEV_BUDGET="$INPUT_JEV_BUDGET"; fi
         set +e
         node "$GITHUB_ACTION_PATH/dist/cli.js" | tee "$RUNNER_TEMP/tapcheck.log"

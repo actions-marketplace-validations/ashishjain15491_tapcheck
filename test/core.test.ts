@@ -49,6 +49,11 @@ test('config: errors name the field', () => {
     assert.throws(() => check({ baseUrl: 'http://x', sides: { a: { csrf: { path: '/p', expect: 'x' } } } }), /sides\.a\.csrf\.expect must be/);
     assert.throws(() => check({ baseUrl: 'http://x', changes: ['src/**'] }), /changes must map a suite name/);
     assert.throws(() => check({ baseUrl: 'http://x', changes: { e2e: ['src/**'] } }), /changes\.e2e names a suite that doesn't exist/);
+    assert.doesNotThrow(() => check({ baseUrl: 'http://x', changes: { 'flow-checkout': ['src/**'], 'a11y-public': ['src/**'] } }));
+    assert.equal(check({ baseUrl: 'http://x' }).parallel, 1);
+    assert.equal(check({ baseUrl: 'http://x', parallel: 4 }).parallel, 4);
+    assert.throws(() => check({ baseUrl: 'http://x', parallel: 0 }), /parallel must be a whole number from 1 to 32/);
+    assert.throws(() => check({ baseUrl: 'http://x', parallel: 2.5 }), /parallel must be a whole number/);
     assert.throws(() => check({ baseUrl: 'http://x', changes: { ux: 'src/**' } }), /changes\.ux must be a list of globs/);
     assert.throws(() => check({ baseUrl: 'http://x', changes: { '*': ['src/**', ''] } }), /changes\.\*\[1\] must be a non-empty string/);
     assert.deepEqual(check({ baseUrl: 'http://x', changes: { '*': ['src/**'], a11y: ['**/*.css'] } }).changes, { '*': ['src/**'], a11y: ['**/*.css'] });

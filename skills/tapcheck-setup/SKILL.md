@@ -185,7 +185,7 @@ routes: <from the recipe>           # a command printing JSON [{method, path, au
 gates:                              # the project's existing linters and audits; exit 0 passes
   - { name: lint, run: <the project's lint command> }
   - { name: dependency advisories, run: <audit command>, warn: true }
-changes:                            # for CHANGED=1: which files each suite depends on (globs from the git root)
+changes:                            # for CHANGED: which files each suite, or one part (flow-<name>), depends on (globs from the git root)
   "*": ["src/**", "templates/**"]
 security:
   csrf: { method: POST, path: /orders, expect: 403 }   # from the recipe, if the framework has CSRF protection
@@ -200,6 +200,8 @@ Every other key (`app.stop`, `app.timeout`, `app.resetWhen`, `login` kinds in fu
 - **Routes**: run the recipe's command by hand first and check that it prints a JSON list; then put it in the file.
   A multi-line command goes in a YAML block (`routes: |`).
 - **Changes**: only when the project is a git repository; `CHANGED=1` needs one. Otherwise leave `changes` out.
+  With flows, give each flow the folders of the feature it tests (`flow-checkout: ["app/Cart/**"]`), so a pull
+  request reruns only its own flows with `CHANGED=origin/main`; `flow` covers the flows without globs of their own.
 - **Stub, mail, start and reset**: from step 3. `stub`, `stub.dns` and `mail` are in CONFIG.md.
 
 ### 5. Run it

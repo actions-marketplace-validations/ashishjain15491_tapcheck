@@ -58,7 +58,7 @@ test('RECORD=1: a context writes a video and a trace, the report links them, and
 
 test('t.jev and t.mail.judge: verdicts become findings of the flow; skipped with JEV=off', async () => {
     setup(cfg.jev, fake);
-    const t = new T(r, { name: 'Look', side: 'public', part: 'flow-look', timeout: 60, run: async () => {} });
+    const t = new T(r, { name: 'Look', side: 'public', part: 'flow-look', timeout: 60, serial: false, run: async () => {} });
     found.length = 0;
     let a: Record<string, any> | null = null;
     await t.step('open the shop', async () => { await t.goto('/b'); a = await t.jev('home'); });

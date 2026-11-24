@@ -52,7 +52,7 @@ test('schema: the example tapcheck.yml and the configs in the docs are valid', (
         tasks: [{ name: 'Find', from: '/', goal: 'Find it.', done: 'It is open.', notDone: 'It is not.', optimal: 1, text: 'fern' }],
         crawl: { max: 60, skip: '/logout' }, security: { csrf: { method: 'POST', path: '/orders', expect: 419 }, allowedHosts: ['fonts.example.com'], publicWrites: '^/login' },
         viewports: [{ name: 'desktop', width: 1440, height: 900 }, { name: 'mobile', width: 390, height: 844, mobile: true }],
-        jev: { budget: 0.5, headers: { 'X-Team': 'web' } }, i18n: { keys: 'cat keys.txt' }, changes: { '*': ['src/**'], contract: ['api/**'] },
+        jev: { budget: 0.5, headers: { 'X-Team': 'web' } }, i18n: { keys: 'cat keys.txt' }, changes: { '*': ['src/**'], contract: ['api/**'], 'flow-checkout': ['app/Cart/**'] }, parallel: 4,
         gates: [{ name: 'lint', run: 'ruff check .' }, { name: 'audit', run: 'npm audit', warn: true, timeout: 120 }],
         stub: { port: 8766, rules: [{ host: 'api.example.com', method: 'POST', path: '/v1/charges', status: 201, json: { id: 'ch_1' }, headers: { 'x-a': 'b' }, delayMs: 200 }, { body: 'ok' }],
             dns: { port: 8767, defaultA: '203.0.113.7', records: [{ name: 'shop.example.com', type: 'MX', values: ['10 mx.example.com'] }, { name: 'shop.example.com', type: 'TXT', values: ['v=spf1 -all'] }] } },

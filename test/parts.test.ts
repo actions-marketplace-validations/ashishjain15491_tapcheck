@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
-import { build, changedParts, mark, resetDue, select, snapshot, withNeeds, type State } from '../src/parts.ts';
+import { build, changedParts, mark, pool, resetDue, select, snapshot, withNeeds, type State } from '../src/parts.ts';
 
 const PARTS = build(['customer', 'staff']);
 const names = (only: string, skip = '') => withNeeds(PARTS, select(PARTS, only ? only.split(',') : [], skip ? skip.split(',') : [])).map((p) => p.name);
@@ -58,6 +58,25 @@ test('code and flows: code has no side and comes first, each flow is a part on i
     assert.deepEqual(mark(state, ran, [{ suite: 'flow-sign-up', side: 'customer', status: 'fail' }, { suite: 'crawl', side: 'customer', status: 'fail' }], { snapshot: 'abc', untracked: [] }),
         { code: true, 'flow-check-out': true, 'flow-sign-up': false });
     assert.deepEqual(mark(state, ran, [{ suite: 'code', side: '', status: 'fail' }], null), { code: false, 'flow-check-out': true, 'flow-sign-up': true });
+});
+
+test('pool: at most n at a time, in order; one alone runs by itself; nothing starts once stopped', async () => {
+    const log: string[] = [];
+    let now = 0, most = 0;
+    const run = async (x: string) => {
+        log.push(`+${x}`); most = Math.max(most, ++now);
+        await new Promise((ok) => setTimeout(ok, x === 'a' ? 30 : 10));
+        now--; log.push(`-${x}`);
+    };
+    await pool(['a', 'b', 'c', 'S', 'd', 'e'], 2, (x) => x === 'S', run);
+    assert.equal(most, 2);
+    assert.deepEqual(log.filter((l) => l.startsWith('+')), ['+a', '+b', '+c', '+S', '+d', '+e'], 'started in order');
+    const s = log.indexOf('+S');
+    assert.deepEqual(log.slice(s, s + 2), ['+S', '-S'], 'S ran alone');
+    assert.ok(['-a', '-b', '-c'].every((l) => log.indexOf(l) < s), 'after the ones before it ended');
+    const started: number[] = [];
+    await pool([1, 2, 3, 4], 1, () => false, async (x) => { started.push(x); }, () => started.length >= 2);
+    assert.deepEqual(started, [1, 2]);
 });
 
 // ───────────────────────────── the CLI itself, on a config whose app can't start ─────────────────────────────
@@ -214,6 +233,35 @@ test('CHANGED: only the parts whose files changed since they last passed', () =>
     assert.equal(changedParts(parts, fresh, { ux: ['app/**'] }, inner).length, 8);
 });
 
+test('CHANGED: a part name\'s globs win over its suite\'s; CHANGED=<ref> compares with the branch point', () => {
+    const cwd = mkdtempSync(`${tmpdir()}/tapcheck-base-`);
+    const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...a], { cwd, stdio: 'pipe' });
+    const put = (file: string, text: string) => { mkdirSync(dirname(`${cwd}/${file}`), { recursive: true }); writeFileSync(`${cwd}/${file}`, text); };
+    const parts = build(['public'], { flows: [{ part: 'flow-checkout', side: 'public' }, { part: 'flow-signup', side: 'public' }] }).filter((p) => p.suite === 'flow' || p.suite === 'a11y');
+    const changes = { flow: ['app/**'], 'flow-checkout': ['app/Cart/**'], '*': ['shared/**'] };
+    const at = { config: 'tapcheck.yml', out: '.tapcheck', cwd };
+    const names = (base?: string, state: State = { parts: {} }) => changedParts(parts, state, changes, { ...at, base }).map((p) => p.name);
+
+    git('init', '-q', '-b', 'main');
+    put('app/Cart/cart.php', '1'); put('app/User/signup.php', '1'); put('shared/x.css', '1'); put('tapcheck.yml', 'baseUrl: http://x');
+    git('add', '.'); git('commit', '-qm', 'base');
+    git('checkout', '-qb', 'pr');
+    assert.deepEqual(names('main'), [], 'nothing changed on the branch: no state needed, nothing runs');
+    assert.throws(() => names('nope'), /CHANGED=nope: git finds no commit shared/);
+
+    put('app/User/signup.php', '2'); git('commit', '-qam', 'pr change');
+    assert.deepEqual(names('main'), ['flow-signup'], 'flow-checkout has its own globs, so a change elsewhere in app/ skips it');
+    git('checkout', '-q', 'main'); put('app/Cart/cart.php', '2'); git('commit', '-qam', 'later on main'); git('checkout', '-q', 'pr');
+    assert.deepEqual(names('main'), ['flow-signup'], "main's own later commits don't count: only the branch's changes");
+    put('app/Cart/cart.php', '3'); // uncommitted work on the branch counts too
+    assert.deepEqual(names('main'), ['flow-checkout', 'flow-signup']);
+    git('checkout', '-q', 'app/Cart/cart.php');
+    put('shared/new.css', '1'); // untracked: "*" globs add to the part's own
+    assert.deepEqual(names('main'), ['a11y-public', 'flow-checkout', 'flow-signup']);
+    const snap = snapshot(cwd)!;
+    assert.deepEqual(names(undefined, { parts: Object.fromEntries(parts.map((p) => [p.name, snap])) }), [], 'CHANGED=1 still compares with the last pass');
+});
+
 test('app.resetWhen: a reset is due on first use and when a matching file changed since the last one', () => {
     const cwd = mkdtempSync(`${tmpdir()}/tapcheck-reset-`);
     const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...a], { cwd, stdio: 'pipe' });
@@ -236,4 +284,31 @@ test('app.resetWhen: a reset is due on first use and when a matching file change
     assert.equal(resetDue(state, globs, cwd), 'users.seed.json changed since the last reset');
     state.reset = { snapshot: '0123456789abcdef0123456789abcdef01234567', untracked: [] };
     assert.equal(resetDue(state, globs, cwd), 'the snapshot of the last reset is gone');
+});
+
+test('cli: PARALLEL runs flows together, a serial one alone, with step lines named', async () => {
+    const cwd = mkdtempSync(`${tmpdir()}/tapcheck-parallel-`);
+    const server = createServer((q, s) => s.end('<title>t</title><main>hi</main>')).listen(0);
+    await once(server, 'listening');
+    const port = (server.address() as AddressInfo).port;
+    const flow = (name: string, ms: number, serial = false) => writeFileSync(`${cwd}/${name}.flow.js`, `import { appendFileSync } from 'node:fs';
+export default { name: '${name}', serial: ${serial}, run: async (t) => {
+    await t.step('wait', async () => { appendFileSync('log.txt', '+${name}\\n'); await new Promise((ok) => setTimeout(ok, ${ms})); appendFileSync('log.txt', '-${name}\\n'); });
+} };`);
+    flow('a', 1500); flow('b', 300); flow('m', 100, true); flow('z', 100); // files load in name order: a, b, m, z
+    writeFileSync(`${cwd}/tapcheck.yml`, [`baseUrl: http://127.0.0.1:${port}`, 'flows: "*.flow.js"'].join('\n'));
+    try {
+        const run = await new Promise<{ code: number | null; out: string }>((done) => {
+            const c = spawn(process.execPath, [resolve('src/cli.ts')], { cwd, env: { ...process.env, JEV: 'off', ONLY: 'flow', PARALLEL: '2' } });
+            let out = '';
+            c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { out += d; });
+            c.on('close', (code) => done({ code, out }));
+        });
+        assert.equal(run.code, 0, run.out);
+        const log = readFileSync(`${cwd}/log.txt`, 'utf8').trim().split('\n');
+        assert.deepEqual(log.slice(0, 4), ['+a', '+b', '-b', '-a'], `a and b ran together: ${log}`);
+        assert.deepEqual(log.slice(4), ['+m', '-m', '+z', '-z'], 'm ran alone, after both');
+        assert.match(run.out, /\[flow-a\] ✓ wait/);
+        assert.match(run.out, /flow-b done in/);
+    } finally { server.close(); }
 });
