@@ -69,6 +69,18 @@ export function reach(r: Run, what: string, step = r.step) {
     if (!list.some((x) => x.part === part && x.step === step && x.what === what)) list.push({ part, ...(step ? { step } : {}), what });
 }
 const ASSET = ['image', 'font', 'stylesheet', 'script', 'media', 'manifest'];
+/** Answers that mean the app refused the request or has no such route: not reached. */
+export const REFUSED = [401, 403, 404, 405];
+
+/** The method the app routes a request by: a form POST that says `_method` (Laravel, Rails, Symfony) or an override header is that method. */
+export function routedMethod(q: { method(): string; url(): string; headers(): Record<string, string>; postData(): string | null }): string {
+    if (q.method() !== 'POST') return q.method();
+    let body = '';
+    try { body = q.postData() ?? ''; } catch { /* a body that isn't text */ }
+    const said = q.headers()['x-http-method-override'] ?? new URL(q.url()).searchParams.get('_method')
+        ?? body.match(/(?:^|&)_method=([A-Za-z]+)(?:&|$)|name="_method"\r?\n\r?\n([A-Za-z]+)|"_method"\s*:\s*"([A-Za-z]+)"/)?.slice(1).find(Boolean);
+    return said && /^(PUT|PATCH|DELETE)$/i.test(said) ? said.toUpperCase() : 'POST';
+}
 
 /** A screen's address: a path on the side's base URL, or a full URL as given. */
 export const abs = (r: Run, path: string) => (/^https?:\/\//.test(path) ? path : r.side.baseUrl + path);
@@ -89,7 +101,7 @@ export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = fal
     // Reached: a request to the app itself that it didn't refuse (401, 403, 405) or not find (404). Page assets aside.
     ctx.on('response', (res) => {
         const q = res.request();
-        if (host(q.url()) === own && !ASSET.includes(q.resourceType()) && ![401, 403, 404, 405].includes(res.status())) reach(r, `${q.method()} ${new URL(q.url()).pathname}`);
+        if (host(q.url()) === own && !ASSET.includes(q.resourceType()) && !REFUSED.includes(res.status())) reach(r, `${routedMethod(q)} ${new URL(q.url()).pathname}`);
     });
     if (!record) return ctx;
 

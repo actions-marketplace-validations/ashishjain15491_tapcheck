@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { after, test } from 'node:test';
-import { closeBrowser, type Run } from '../src/browser.ts';
+import { closeBrowser, routedMethod, type Run } from '../src/browser.ts';
 import { check } from '../src/config.ts';
 import { loadFlows, runFlow } from '../src/flow.ts';
 import * as jev from '../src/jev.ts';
@@ -28,6 +28,7 @@ test('flows: loaded from globs, run end to end with passing and failing steps, t
         const u = new URL(req.url!, 'http://x');
         if (!u.pathname.startsWith('/api/v1/')) { res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE); return; }
         asked.push(`${req.method} ${u.pathname}${u.search}`);
+        if (req.method === 'DELETE') { res.writeHead(200, { 'content-type': 'text/plain' }).end('ok'); return; } // as Mailpit does
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(u.pathname.endsWith('/search') ? { messages: asked.length > 1 ? [MAIL] : [], messages_count: 3 }
             : u.pathname.endsWith('/headers') ? { 'List-Unsubscribe': ['<mailto:off@shop.test>'] } : MAIL));
     });
@@ -67,8 +68,10 @@ export default {
             t.expect(mail.links.length === 1 && mail.links[0] === 'http://shop.test/confirm?a=1&b=2', 'links: ' + mail.links);
             t.expect(mail.id === 'm1' && mail.headers['List-Unsubscribe'][0] === '<mailto:off@shop.test>', 'id and headers: ' + JSON.stringify([mail.id, mail.headers]));
             t.expect((await t.mail.count({ to: 'ada@example.com' })) === 3, 'count');
-            const all = await t.mail.all({ subject: 'Confirm' });
+            const all = await t.mail.all({ subject: 'Confirm', limit: 1 });
             t.expect(all.length === 1 && all[0].id === 'm1', 'all: ' + all.length);
+            const err = await t.mail.all({ limit: 0 }).catch((e) => e.message);
+            t.expect(/limit must be a whole number from 1 to 500/.test(err), String(err));
             await t.mail.clear();
         });
         await t.step('it works, with a caveat', async () => ({ warn: 'no way to undo it on screen' }));
@@ -112,7 +115,7 @@ export default {
     assert.equal(found.find((f) => f.status === 'warn')!.detail, 'no way to undo it on screen');
     const q = 'query=to%3A%22ada%40example.com%22%20subject%3A%22Confirm%22';
     assert.deepEqual(asked, [`GET /api/v1/search?limit=1&${q}`, `GET /api/v1/search?limit=1&${q}`, 'GET /api/v1/message/m1', 'GET /api/v1/message/m1/headers', // it waited for the mail to arrive
-        'GET /api/v1/search?limit=1&query=to%3A%22ada%40example.com%22', 'GET /api/v1/search?limit=500&query=subject%3A%22Confirm%22', 'GET /api/v1/message/m1', 'GET /api/v1/message/m1/headers',
+        'GET /api/v1/search?limit=1&query=to%3A%22ada%40example.com%22', 'GET /api/v1/search?limit=1&query=subject%3A%22Confirm%22', 'GET /api/v1/message/m1', 'GET /api/v1/message/m1/headers',
         'DELETE /api/v1/messages']);
 
     // Outside a step, what a flow throws is the caller's; t.stub and t.mail say which config they need.
@@ -143,19 +146,23 @@ test('flows: one that never settles fails at its timeout, a bad timeout is refus
     const seen: string[] = [];
     const g = globalThis as { cleaned?: boolean; aborted?: boolean };
     writeFileSync(`${dir}/late.flow.js`, `export default { name: 'Late', timeout: 0.2, run: async (t) => {
-        t.cleanup(async () => { await t.step('put back', async () => {}); globalThis.cleaned = true; }); // t.* still works in a cleanup
+        t.cleanup(async () => { await new Promise((done) => setTimeout(done, 400)); await t.step('put back', async () => {}); globalThis.cleaned = true; }); // t.* still works in a cleanup, the abandoned run()'s doesn't meanwhile
         t.note('before', 'in time', 'info');
         await new Promise((done) => setTimeout(done, 400));
         globalThis.aborted = t.signal.aborted;
+        globalThis.mailErr = await t.mail.count().then(() => 'answered', (e) => String(e));
+        try { t.reach('GET', '/late'); } catch {}
         t.note('after', 'too late', 'fail');
         await t.step('late step', async () => {});
     } };\n`);
-    const [late] = await loadFlows(check({ baseUrl: 'http://127.0.0.1:1', flows: ['late.flow.js'] }, dir));
-    const rl = { ...r, record: (f: Finding) => seen.push(f.check) } as unknown as Run;
+    const lateCfg = check({ baseUrl: 'http://127.0.0.1:1', flows: ['late.flow.js'], mail: { mailpit: 'http://127.0.0.1:1' } }, dir);
+    const [late] = await loadFlows(lateCfg);
+    const rl = { ...r, cfg: lateCfg, record: (f: Finding) => seen.push(f.check) } as unknown as Run;
     await assert.rejects(runFlow(late, rl), /didn't finish within 0.2 s/);
     assert.equal(g.cleaned, true, 'the cleanup ran at the timeout');
-    await new Promise((done) => setTimeout(done, 400));
     assert.equal(g.aborted, true);
+    assert.match(String((g as { mailErr?: string }).mailErr), /didn't finish within 0.2 s/); // stopped by the timeout, never sent
+    assert.equal((rl as { reached?: unknown[] }).reached, undefined);
     assert.deepEqual(seen, ['before', 'put back']); // nothing the abandoned run() did after the timeout
     writeFileSync(`${dir}/bad.flow.js`, "export default { name: 'Bad', timeout: 'soon', run: async () => {} };\n");
     await assert.rejects(loadFlows(check({ baseUrl: 'http://127.0.0.1:1', flows: ['bad.flow.js'] }, dir)), /timeout must be a number of seconds/);
@@ -167,6 +174,7 @@ test('flows: t.ask asks Jev about text, t.reach counts a request, a Jev outage i
 export default { name: 'Ask', run: async (t) => {
     await t.ask('the diff', { diff: 'adds a guard' }, { risky: noul('Is \`diff\` risky?') });
     t.reach('post', '/api/things?x=1');
+    t.reach('DELETE', '/api/things', 404); // refused or not found: not counted
     t.reach('GET', 'https://api.stripe.com/v1/charges'); // not the app's host: not counted
     await t.ask('down', { x: 1 }, { ok: noul('Is it fine?') });
     t.note('own check', 'went wrong', 'fail');
@@ -192,4 +200,49 @@ export default { name: 'Ask', run: async (t) => {
     ]);
     assert.match(found[1].detail!, /503 from Jev/);
     assert.deepEqual(r.reached, [{ part: flow.part, what: 'POST /api/things' }]);
+});
+
+test('flows: t.use makes a page current again, a timeout closes the pages before the cleanups', async () => {
+    const server = createServer((req, res) => req.url === '/private' ? res.writeHead(302, { location: '/login' }).end()
+        : res.writeHead(200, { 'content-type': 'text/html' }).end(`<title>${req.url}</title><h1>${req.url}</h1>
+            <form method="post" action="/things/7"><input type="hidden" name="_method" value="DELETE"><button>Delete</button></form>`));
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    after(async () => { await closeBrowser(); server.close(); });
+    const dir = mkdtempSync(`${tmpdir()}/tapcheck-flow-use-`);
+    writeFileSync(`${dir}/use.flow.js`, `export default { name: 'Use', side: 'public', timeout: 8, run: async (t) => {
+        const first = await t.goto('/first');
+        const second = await t.page({ fresh: true }); // a second visitor: now the current page
+        t.expect((await t.goto('/second')) === second, 'goto went to the first page');
+        t.expect(t.use(first) === first && (await t.goto('/again')) === first, 'use() did not make the first page current');
+        await Promise.all([first.waitForResponse(/things/), first.getByRole('button', { name: 'Delete' }).click()]); // reached as DELETE /things/7
+        const out = await t.page({ auth: false });
+        const [tab] = await Promise.all([out.context().waitForEvent('page'), out.evaluate(() => window.open('/ask'))]);
+        t.use(tab); await t.goto('/private'); // signed out: a tab sent to sign in isn't an ended session
+        t.use(first);
+        await t.step('fails on the first page', async () => { throw new Error('no'); });
+        t.cleanup(async () => { const p = await t.page(); globalThis.useSeen = { closed: first.isClosed() && second.isClosed(), fresh: !p.isClosed() && p !== first }; });
+        await new Promise((done) => setTimeout(done, 10000));
+    } };\n`);
+    const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, flows: ['use.flow.js'],
+        sides: { public: { login: { form: { url: '/login', fields: { '#e': 'a' } } } } } }, dir);
+    const [flow] = await loadFlows(cfg);
+    const found: Finding[] = [];
+    const r = { cfg, side: cfg.sides[0], dir, record: (f: Finding) => found.push(f), crawl: { pages: [], hits: [], done: false }, part: flow.part } as unknown as Run;
+    await assert.rejects(runFlow(flow, r), /didn't finish within 8 s/);
+    assert.deepEqual(found.map((f) => [f.check, f.status]), [['fails on the first page', 'fail']], JSON.stringify(found));
+    assert.ok(r.reached?.some((x) => x.what === 'DELETE /things/7'), JSON.stringify(r.reached));
+    assert.ok(found[0].evidence?.[0] && existsSync(found[0].evidence[0]), 'the failed step has a screenshot');
+    assert.deepEqual((globalThis as { useSeen?: unknown }).useSeen, { closed: true, fresh: true });
+});
+
+test('flows: a form POST that says _method is reached as that method', () => {
+    const q = (method: string, body: string | null, headers: Record<string, string> = {}, url = 'http://a.test/x') => ({ method: () => method, url: () => url, postData: () => body, headers: () => headers });
+    assert.equal(routedMethod(q('POST', '_token=x&_method=PATCH&name=a')), 'PATCH');
+    assert.equal(routedMethod(q('POST', '--b\r\nContent-Disposition: form-data; name="_method"\r\n\r\ndelete\r\n--b--')), 'DELETE');
+    assert.equal(routedMethod(q('POST', '{"_method":"PUT","a":1}')), 'PUT');
+    assert.equal(routedMethod(q('POST', null, { 'x-http-method-override': 'PUT' })), 'PUT');
+    assert.equal(routedMethod(q('POST', '_method=GET')), 'POST'); // only PUT, PATCH and DELETE are spoofed
+    assert.equal(routedMethod(q('POST', 'note=_method=PATCH')), 'POST'); // a value that only mentions it
+    assert.equal(routedMethod(q('GET', '_method=DELETE')), 'GET');
+    assert.equal(routedMethod(q('POST', '', {}, 'http://a.test/x?_method=PATCH')), 'PATCH');
 });

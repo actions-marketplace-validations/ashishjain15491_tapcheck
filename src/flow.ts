@@ -24,7 +24,8 @@ import { globSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BrowserContext, Page } from 'playwright';
-import { abs, context, guard, host, reach, settle, slices, slug, watch, type Run } from './browser.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { abs, context, guard, host, reach, REFUSED, settle, slices, slug, watch, type Run } from './browser.ts';
 import { isLocal, type Config } from './config.ts';
 import * as jev from './jev.ts';
 import { EMAIL, VISUAL, YES_IS_DEFECT } from './questions.ts';
@@ -41,20 +42,24 @@ export type Loaded = Required<Flow> & { part: string };
 /** One message in Mailpit. headers: every header by name, as Mailpit spells it ("List-Unsubscribe"), each with its values. */
 export type Mail = { id: string; subject: string; from: string; to: string[]; html: string; text: string; links: string[]; headers: Record<string, string[]> };
 
+// Set while a cleanup runs, so its t.* calls work past the timeout while the abandoned run()'s, in another async context,
+// don't. One token per cleanup, switched off when its 60 s are up, so a cleanup that hangs past them loses it too.
+const inCleanup = new AsyncLocalStorage<{ on: boolean }>();
+
 /** What a flow's run() is handed. */
+
 export class T {
     private r: Run;
     private flow: Loaded;
     private stubUrl?: string;
     private pages = new Map<string, Page>(); // "<viewport> <signed in>" → page
     private fresh: BrowserContext[] = []; // contexts of t.page({ fresh: true }), closed with the flow
-    private signedOut = new WeakSet<Page>();
+    private signedOut = new WeakSet<BrowserContext>();
     private errors = new WeakMap<Page, string[]>();
     private current?: Page; // the page last handed out: goto() drives it, a failed step shows it
     private cleanups: (() => unknown)[] = [];
     private shots = 0;
     private dead = false; // past the flow's timeout: what it still records is dropped
-    private cleaning = false; // the cleanups run: they may use t.* even past the timeout
     private abort = new AbortController();
     /** Aborted when the flow runs out of time: pass it to long waits of your own, or check `t.signal.aborted` in a loop. */
     readonly signal = this.abort.signal;
@@ -68,28 +73,34 @@ export class T {
     /** The run's folder, for files of the flow's own (a payload log, a list it made). */
     get dir(): string { return this.r.dir; }
 
-    private record(f: Omit<Finding, 'side'>) { if (!this.dead || this.cleaning) this.r.record(f); }
+    private record(f: Omit<Finding, 'side'>) { if (this.live()) this.r.record(f); }
+    private live() { return !this.dead || inCleanup.getStore()?.on === true; }
 
     /** Stops the flow at its timeout: later findings are dropped and `t.signal` is aborted. */
     kill(why: string) { this.dead = true; this.abort.abort(new Error(why)); }
 
-    /** Past the timeout every t.* call throws, so the abandoned run() stops at its next one. */
-    private alive() { if (this.dead && !this.cleaning) throw this.signal.reason; }
+    /** Past the timeout every t.* call but a cleanup's throws, so the abandoned run() stops at its next one. */
+    private alive() { if (!this.live()) throw this.signal.reason; }
 
     /** Runs `fn` when the flow ends, also when it fails or runs out of time (each one gets 60 s): put back what it changed. */
     cleanup(fn: () => unknown): void { this.alive(); this.cleanups.push(fn); }
 
-    /** Runs the cleanups, last added first; one that throws or hangs is a warning. */
+    /**
+     * Runs the cleanups, last added first; one that throws or hangs is a warning. Past the timeout the flow's pages are
+     * closed first, so the abandoned run() can't drive one while a cleanup works: a cleanup's t.page() opens new ones.
+     * Only what a cleanup awaits itself carries its t.* rights: a Playwright handler it adds (page.on) runs outside them
+     * unless wrapped with AsyncResource.bind (node:async_hooks).
+     */
     async finish() {
-        this.cleaning = true;
+        if (this.dead) { await this.close(); this.pages.clear(); this.fresh = []; this.current = undefined; }
         for (let fn; (fn = this.cleanups.pop()); ) {
             let timer: NodeJS.Timeout | undefined;
+            const token = { on: true };
             const cap = new Promise((_, no) => { timer = setTimeout(() => no(new Error('it took over 60 s')), 60_000); });
-            try { await Promise.race([Promise.resolve().then(fn), cap]); } catch (e) {
+            try { await Promise.race([inCleanup.run(token, () => Promise.resolve().then(fn)), cap]); } catch (e) {
                 this.r.record({ suite: this.flow.part, where: this.flow.name, check: 'cleanup ran', status: 'warn', detail: String((e as Error).message ?? e).slice(0, 300) });
-            } finally { clearTimeout(timer); }
+            } finally { token.on = false; clearTimeout(timer); }
         }
-        this.cleaning = false;
         this.dead = true; // the flow is over: an abandoned run() that wakes up later records nothing
     }
 
@@ -97,7 +108,8 @@ export class T {
      * A page on the flow's side, signed in with the side's session (`{ auth: false }`: signed out), at the first viewport
      * or the one `viewport` names (`{ viewport: 'mobile' }`, a name from the config's viewports). One of each is kept, and
      * the page handed out last is the current one: t.goto() and t.jev() act on it. `{ fresh: true }` gives a new page in
-     * a context of its own every time (cookies and storage its own too), for a second visitor or a sign-in of the flow's own.
+     * a context of its own every time (cookies and storage its own too), for a second visitor or a sign-in of the flow's own;
+     * it is the current page too, until t.page() or t.use() hands out another.
      */
     async page(opts: { auth?: boolean; viewport?: string; fresh?: boolean } = {}): Promise<Page> {
         this.alive();
@@ -106,15 +118,26 @@ export class T {
         if (!vp) throw new Error(`t.page: no viewport is called "${opts.viewport}" (viewports: ${all.map((v) => v.name).join(', ')}).`);
         const open = async () => {
             const ctx = await context(this.r, vp, auth);
-            const page = await ctx.newPage();
+            const page = await ctx.newPage().catch(async (e) => { await ctx.close().catch(() => {}); throw e; });
+            if (!this.live()) { await ctx.close().catch(() => {}); this.alive(); } // timed out while it opened: not into the cleanups' cache
             this.errors.set(page, watch(page));
-            if (!auth) this.signedOut.add(page);
+            if (!auth) this.signedOut.add(ctx);
             return { ctx, page };
         };
         if (opts.fresh) { const { ctx, page } = await open(); this.fresh.push(ctx); return (this.current = page); }
         const key = `${vp.name} ${auth}`;
         if (!this.pages.has(key)) this.pages.set(key, (await open()).page);
         return (this.current = this.pages.get(key)!);
+    }
+
+    /**
+     * Makes `page` the current one: t.goto(), t.jev() and a failed step's screenshot act on it. For a page t.page() handed
+     * out earlier (back to the first visitor after a second one), or a tab the app opened itself (`context.waitForEvent('page')`).
+     */
+    use(page: Page): Page {
+        this.alive();
+        if (!this.errors.has(page)) this.errors.set(page, watch(page));
+        return (this.current = page);
     }
 
     /**
@@ -128,13 +151,18 @@ export class T {
         const url = abs(this.r, path);
         await page.goto(url, { waitUntil: 'domcontentloaded' });
         await settle(page);
-        if (opts.guard !== false && !this.signedOut.has(page)) guard(this.r, new URL(url).pathname, page.url());
+        if (opts.guard !== false && !this.signedOut.has(page.context())) guard(this.r, new URL(url).pathname, page.url());
         return page;
     }
 
-    /** Counts a request to the app the flow made itself (page.request, fetch) as reached, for hits.json and COVERAGE=1. */
-    reach(method: string, url: string): void {
+    /**
+     * Counts a request to the app the flow made itself (page.request, fetch) as reached, for hits.json and COVERAGE=1.
+     * Pass its answer's status, and one the app refused (401, 403, 405) or didn't find (404) isn't counted, as in the browser.
+     */
+    reach(method: string, url: string, status?: number): void {
+        this.alive();
         const u = new URL(abs(this.r, url));
+        if (status !== undefined && REFUSED.includes(status)) return;
         if (host(u.href) === host(this.r.side.baseUrl)) reach(this.r, `${method.toUpperCase()} ${u.pathname}`); // another host isn't the app's
     }
 
@@ -153,7 +181,7 @@ export class T {
         if (errors) errors.length = 0;
         const base = { suite: this.flow.part, where: this.flow.name, check: name };
         const t0 = Date.now();
-        const done = (mark: string) => { if (!this.dead || this.cleaning) process.stdout.write(`    ${mark} ${name} (${((Date.now() - t0) / 1000).toFixed(1)} s)\n`); }; // progress, one line a step
+        const done = (mark: string) => { if (this.live()) process.stdout.write(`    ${mark} ${name} (${((Date.now() - t0) / 1000).toFixed(1)} s)\n`); }; // progress, one line a step
         this.r.step = name; // what the step reaches is filed under it (hits.json)
         try {
             const out = await fn();
@@ -176,6 +204,7 @@ export class T {
 
     /** A finding the flow decides itself: a warning (default), a failure, or info such as a check it skipped and why. */
     note(name: string, detail: string, status: 'warn' | 'info' | 'fail' = 'warn'): void {
+        this.alive();
         this.record({ suite: this.flow.part, where: this.flow.name, check: name, status, detail });
     }
 
@@ -215,6 +244,7 @@ export class T {
      * recorded as info. The page is looked at once it has settled. The answers are returned for the flow's own checks; null when Jev is off or over its budget.
      */
     async jev(label: string, questions: Record<string, any> = VISUAL): Promise<Record<string, any> | null> {
+        this.alive();
         if (jev.whyOff()) return this.skipped(label, jev.whyOff());
         const page = this.current ?? await this.page();
         const vh = page.viewportSize()?.height ?? 800;
@@ -239,14 +269,22 @@ export class T {
      * whose files are `images`): no screenshot is taken. Findings, budget and null as for t.jev().
      */
     async ask(label: string, state: Record<string, unknown>, questions: Record<string, any>, images: string[] = []): Promise<Record<string, any> | null> {
+        this.alive();
         if (jev.whyOff()) return this.skipped(label, jev.whyOff());
         return this.look(label, state, questions, images);
     }
 
+    /** Mailpit and the stub: 30 s at most a call, and none past the flow's timeout (but a cleanup's). */
     private async api(base: string, path: string, method = 'GET', body?: unknown): Promise<any> {
-        const res = await fetch(base + path, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+        this.alive();
+        const signal = AbortSignal.any([AbortSignal.timeout(30_000), ...(inCleanup.getStore()?.on ? [] : [this.signal])]);
+        const res = await fetch(base + path, { method, signal, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
         if (!res.ok) throw new Error(`${method} ${base}${path} answered ${res.status}`);
-        return res.json();
+        const text = await res.text();
+        try { return JSON.parse(text); } catch {
+            if (method === 'DELETE') return text; // Mailpit's answers "ok"
+            throw new Error(`${method} ${base}${path} answered ${res.status} but not with JSON: ${text.slice(0, 80)}`);
+        }
     }
     private need(u: string | undefined, field: string): string {
         if (!u) throw new Error(`This flow uses ${field === 'stub' ? 't.stub' : 't.mail'}, but tapcheck.yml has no ${field}.`);
@@ -330,10 +368,12 @@ export class T {
             },
             /** How many messages are to that address and/or have that subject (a part of either); all of them without a filter. */
             count: async (f: Filter = {}): Promise<number> => { const a = await search(f, 1).found; return a.messages_count ?? a.total ?? 0; },
-            /** Every such message, newest first (at most 500), each read in full. */
-            all: async (f: Filter = {}): Promise<Mail[]> => {
+            /** Every such message, newest first, each read in full: at most `limit` (1 to 500, default 500); `limit: 1` is the newest or none. */
+            all: async (f: Filter & { limit?: number } = {}): Promise<Mail[]> => {
+                const limit = f.limit ?? 500;
+                if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error(`t.mail.all: limit must be a whole number from 1 to 500, not ${limit}.`);
                 const out: Mail[] = [];
-                for (const m of (await search(f, 500).found).messages ?? []) out.push(await read(m.ID));
+                for (const m of (await search(f, limit).found).messages ?? []) out.push(await read(m.ID));
                 return out;
             },
             /**
@@ -364,7 +404,7 @@ export class T {
                 }
             },
             /** Deletes every message in Mailpit. */
-            clear: async () => { await fetch(`${base}/api/v1/messages`, { method: 'DELETE' }); },
+            clear: async () => { await call('messages', 'DELETE'); },
         };
     }
 

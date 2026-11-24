@@ -60,6 +60,10 @@ The first version. Not yet published to npm.
   `VISUAL` and `EMAIL` are exported; a Jev request is capped at 120 s and retried once, and an outage is a warning;
   with a dialog open `t.jev` looks at the screen only; failure screenshots are numbered so long names can't overwrite
   each other. The visual "error shown" question no longer counts a notice about the data as an error.
+  Past its timeout a flow's pages are closed before its cleanups run, and only the cleanups' own `t.*` calls still
+  work (the abandoned run() stops at its next one); `t.use(page)` makes a page current again; `t.reach` takes the
+  answer's status and skips refused ones; Mailpit and stub calls give up after 30 s or at the timeout;
+  `t.mail.all({ limit })`; a form POST with `_method` is reached as that method.
   `browser.args` passes extra switches to the run's Chromium (an app on localhost whose sandboxed preview frames load
   its own files needs `--disable-features=LocalNetworkAccessChecks`). A side whose sign-in fails says so in the terminal, not only in the report.
   Waiting for a page to settle is capped outside the page, so a page whose own timers never fire (one

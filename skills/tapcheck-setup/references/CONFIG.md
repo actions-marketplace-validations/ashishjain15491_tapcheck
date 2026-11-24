@@ -253,7 +253,8 @@ repository `resetWhen` is ignored, with one line saying so. `RESET=1` still forc
 Every run writes `hits.json` per side: each request the app answered, the dialogs and table controls `interact`
 exercised, and for a flow the step that did it. `COVERAGE=1 tapcheck` runs nothing; it merges the `hits.json` of
 every run folder under `out` into one Markdown file, so parts run one at a time add up. With a `routes` command, each
-route is listed with the parts that reached it, or **GAP**; without one, the file lists what was reached.
+route is listed with the parts that reached it, or **GAP**; without one, the file lists what was reached. A form
+POST that carries `_method=PUT|PATCH|DELETE` (or an `X-HTTP-Method-Override` header) is counted as that method.
 
 ```yaml
 coverage:
@@ -272,21 +273,25 @@ Journeys only this app has, written as TypeScript or JavaScript files (ES module
 says `"type": "commonjs"`, name them `.mts` or `.mjs`); each is its own part, `flow-<name>`. Unlike the
 suites, a flow may submit forms and change data, so it belongs with `app.reset` and `RESET=1`. A flow that takes longer
 than its `timeout` (seconds in the flow's export, default 3600) fails and the run goes on: what it still does after that
-is not recorded, `t.signal` is aborted, and what it handed to `t.cleanup(fn)` runs (also when it ends normally), so a
-flow that changes shared state can put it back. The file format and the `t` helpers (`t.goto`, `t.page`, `t.step`,
-`t.expect`, `t.note`, `t.jev`, `t.ask`, `t.reach`, `t.cleanup`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
+is not recorded, `t.signal` is aborted, its pages are closed, and what it handed to `t.cleanup(fn)` runs (also when it
+ends normally), so a flow that changes shared state can put it back. A cleanup that needs a page takes a new one with
+`t.page()`, since a page it captured from the flow is closed by then. Past the timeout only what a cleanup awaits itself may use `t.*`; a
+Playwright handler it adds (`page.on(…)`) needs `AsyncResource.bind` from `node:async_hooks` to count as the cleanup's. The file format and the `t` helpers (`t.goto`, `t.page`, `t.step`,
+`t.use`, `t.expect`, `t.note`, `t.jev`, `t.ask`, `t.reach`, `t.cleanup`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
 top of `src/flow.ts` in the tapcheck folder (`<skill base directory>/../../src/flow.ts`), with a working example in
 `examples/static-site/tests/tapcheck/` there. `await t.jev('cart with two items')` has Jev look at the current page
 (the visual questions, or your own), and `await t.mail.judge(mail)` at an email from `t.mail.waitFor`: each answer is
 a finding of the flow, and with `JEV=off` or no key both record that they were skipped and return `null`. A step
 that returns `{ warn: '…' }` is a warning rather than a pass; `t.mail.count()` and `t.mail.all()` take the same
-`{ to, subject }` filter as `waitFor`, and every message carries its `headers`. `t.page()` is the flow's page at the
+`{ to, subject }` filter as `waitFor` (`all` also a `limit` from 1 to 500, so `all({ to, limit: 1 })` is the newest or none), and every
+message carries its `headers`; a call to Mailpit or the stub gives up after 30 s or at the flow's timeout. `t.page()` is the flow's page at the
 first viewport; `t.page({ viewport: 'mobile' })` is one at the viewport of that name, `t.page({ fresh: true })` a new
-one in a context of its own (a second visitor), and the page handed out last is the one `t.goto()` and `t.jev()` act
-on. On a signed-in page, `t.goto()` throws when the app sends it to sign in; `t.goto(path, { guard: false })` for a
+one in a context of its own (a second visitor), and the page handed out last is the one `t.goto()`, `t.jev()` and a
+failed step's screenshot act on; `t.use(page)` makes another one current again (the first visitor's, or a tab the app
+opened itself). On a signed-in page, `t.goto()` throws when the app sends it to sign in; `t.goto(path, { guard: false })` for a
 flow that expects that (after signing out). `t.ask(label, state, questions)` asks Jev
-about text or data of the flow's own, on the run's budget; `t.reach('POST', '/api/x')` counts a request the flow made
-itself (`page.request`, `fetch`) as reached; `t.note(name, detail, 'fail')` records a failure without a step; `t.dir`
+about text or data of the flow's own, on the run's budget; `t.reach('POST', '/api/x', status)` counts a request the flow made
+itself (`page.request`, `fetch`) as reached, unless its status is 401, 403, 404 or 405; `t.note(name, detail, 'fail')` records a failure without a step; `t.dir`
 is the run's folder. `VISUAL` and `EMAIL`, tapcheck's own question sets, are exported for a flow that changes one
 question. A Jev request that fails is tried once more, and a look Jev can't answer is a warning, not a stopped flow.
 Each finished step prints a line while the flow runs.
