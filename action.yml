@@ -47,7 +47,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v7
       with:
         node-version: ${{ inputs.node-version }}
     - name: Install tapcheck and Chromium
@@ -94,7 +94,7 @@ runs:
       run: cat "$REPORT_DIR/REPORT.md" >> "$GITHUB_STEP_SUMMARY"
     - name: Upload the run folder
       if: ${{ !cancelled() && steps.run.outputs.report-dir != '' }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ inputs.working-directory }}/${{ steps.run.outputs.report-dir }}
