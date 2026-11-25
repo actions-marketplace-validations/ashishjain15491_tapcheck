@@ -1,0 +1,17 @@
+# Weekly dependency updates, one pull request per ecosystem. Security fixes come on their own as soon as an advisory
+# is published (Dependabot security updates, turned on in the repository settings).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      npm: { patterns: ["*"] }
+    ignore:
+      # Playwright moves with the Dockerfile's FROM line (CONTRIBUTING.md); update both together by hand.
+      - dependency-name: playwright
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
