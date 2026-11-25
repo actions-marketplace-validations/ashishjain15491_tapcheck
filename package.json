@@ -1,5 +1,5 @@
 {
-    "name": "tapcheck",
+    "name": "@ashishjain15491/tapcheck",
     "version": "0.1.0",
     "description": "End-to-end and UI audit harness for any web app, whatever its stack: crawl, API contract, security, accessibility, and Jev judgments of what people see.",
     "license": "MIT",
@@ -27,6 +27,9 @@
         "LICENSE",
         "CHANGELOG.md"
     ],
+    "publishConfig": {
+        "access": "public"
+    },
     "engines": {
         "node": ">=22.18.0"
     },

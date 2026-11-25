@@ -2,7 +2,7 @@
 
 ## 0.1.0 (2026-11-25)
 
-The first release: on npm as `tapcheck`, and as the GitHub Action `ashishjain15491/tapcheck@v0.1.0`.
+The first release: on npm as `@ashishjain15491/tapcheck` (the CLI is still `tapcheck`), and as the GitHub Action `ashishjain15491/tapcheck@v0.1.0`.
 
 - **Core harness.** One `tapcheck.yml` describes the app: how to start, stop and reset it, its sides and how each
   signs in (`none`, `manual`, `form` with optional TOTP, `command`), screens, tasks and viewports. `$NAME` values come

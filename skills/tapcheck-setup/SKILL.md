@@ -22,7 +22,7 @@ environment variables in front of it: `LIST=1 TAPCHECK`.
 
 Prefer that launcher: it is the version these instructions were written for. Only when the plugin folder has no
 `bin/tapcheck` (the skill was copied on its own) use the npm package instead:
-`npx tapcheck@<version>`, with the `version` in the plugin's `.claude-plugin/plugin.json`, after
+`npx @ashishjain15491/tapcheck@<version>`, with the `version` in the plugin's `.claude-plugin/plugin.json`, after
 `npx playwright install chromium` (Node.js 22.18 or newer).
 
 Always run it from the folder that holds `tapcheck.yml`: output (`.tapcheck/`), `.env` and `app.start` all resolve
