@@ -7,6 +7,7 @@ No change to what tapcheck checks or how it runs.
 - **README and logo.** A shorter README in the usual layout, with the tapcheck logo (light and dark), a report
   screenshot and badges; the logo kit is in `assets/`. The Codex plugin and the Action use the brand colour.
 - **GitHub Marketplace.** The Action's description fits the Marketplace's 125 characters.
+- **Action.** It runs on the current `actions/setup-node` and `actions/upload-artifact` (v7).
 - **Releases from GitHub.** `.github/workflows/publish.yml` publishes to npm when a release is published, through npm
   trusted publishing with provenance; the release steps are in `CONTRIBUTING.md`.
 - **Repository.** Dependabot updates, a security policy, issue forms, a pull request template and a code of conduct.

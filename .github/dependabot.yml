@@ -10,6 +10,9 @@ updates:
     ignore:
       # Playwright moves with the Dockerfile's FROM line (CONTRIBUTING.md); update both together by hand.
       - dependency-name: playwright
+      # The types follow the oldest Node.js tapcheck supports (engines in package.json), not the newest.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
