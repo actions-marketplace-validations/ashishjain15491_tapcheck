@@ -19,7 +19,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import type { Config } from '../config.ts';
-import { context, open, resolve, SessionExpired, slices, slug, type Run, type Viewport } from '../browser.ts';
+import { context, hashRoute, open, resolve, SessionExpired, slices, slug, type Run, type Viewport } from '../browser.ts';
 import { ask, BudgetReached, img, whyOff } from '../jev.ts';
 import { VISUAL } from '../questions.ts';
 import { AXE } from './a11y.ts';
@@ -266,10 +266,11 @@ export async function run(r: Run) {
         let opened = 0;
         for (const [i, label] of (await openers(page)).entries()) {
             if (!label || opened >= MAX_POPUPS) continue;
-            const home = page.url().split('#')[0];
+            const at = (u: string) => (hashRoute(t.path) ? u : u.split('#')[0]); // on a hash-routed screen a new hash is another screen
+            const home = at(page.url());
             await page.locator(`[data-tapcheck-opener="${i}"]`).click({ timeout: 2000 }).catch(() => {});
             await page.waitForTimeout(300);
-            const found = page.url().split('#')[0] === home && await page.evaluate((POPUP) => {
+            const found = at(page.url()) === home && await page.evaluate((POPUP) => {
                 const p = [...document.querySelectorAll(POPUP)].filter((el) => el.getClientRects().length > 0).at(-1);
                 p?.setAttribute('data-tapcheck-popup', '');
                 return p ? p.getAttribute('role') ?? p.tagName.toLowerCase() : '';
@@ -286,7 +287,7 @@ export async function run(r: Run) {
             await page.keyboard.press('Escape').catch(() => {});
             await page.waitForTimeout(150);
             // Still open, or the click went somewhere else: start again from the screen.
-            if (page.url().split('#')[0] !== home || await page.evaluate((POPUP) => [...document.querySelectorAll(POPUP)].some((el) => el.getClientRects().length > 0), POPUP)) { await open(r, page, t.path); await openers(page); }
+            if (at(page.url()) !== home || await page.evaluate((POPUP) => [...document.querySelectorAll(POPUP)].some((el) => el.getClientRects().length > 0), POPUP)) { await open(r, page, t.path); await openers(page); }
         }
 
         // Dark: the page is loaded again so a theme chosen by script at load time is seen too.

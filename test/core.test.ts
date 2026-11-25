@@ -4,7 +4,9 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { check, expand, isLocal } from '../src/config.ts';
-import { totp } from '../src/auth.ts';
+import { off, totp } from '../src/auth.ts';
+import { UNSAFE } from '../src/suites/usability.ts';
+import { expected } from '../src/report.ts';
 import { guard, SessionExpired, type Run } from '../src/browser.ts';
 import { endpoint, shape } from '../src/suites/contract.ts';
 import { leaksIn } from '../src/suites/security.ts';
@@ -74,6 +76,33 @@ test('reset guard: only local hosts', () => {
 test('totp: RFC 6238 SHA-1 vector', () => {
     // Secret "12345678901234567890" in base32; at T=59 s the 8-digit code is 94287082, so the 6-digit one is 287082.
     assert.equal(totp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59_000), '287082');
+});
+
+test('sign-in: done only back on the side\'s own site, off every sign-in path', () => {
+    const cfg = check({ baseUrl: 'https://app.example.com' });
+    const side = cfg.sides[0];
+    assert.ok(off(cfg, side, 'https://app.example.com/dashboard'));
+    assert.ok(!off(cfg, side, 'https://app.example.com/login'));
+    // An OAuth provider's consent page is off every sign-in path, but not signed in yet.
+    assert.ok(!off(cfg, side, 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x'));
+    assert.ok(!off(cfg, side, 'https://discord.com/oauth2/authorize'));
+});
+
+test('unsafe: settings a click would change on the account are never clicked', () => {
+    for (const l of ['Delete', 'Sign out', 'Dark mode', 'Switch to light mode', 'Theme']) assert.ok(UNSAFE.test(l), l);
+    for (const l of ['Scanner', 'Heatmap', 'Open chart']) assert.ok(!UNSAFE.test(l), l);
+});
+
+test('expect: a matching fail or warn is kept as info with its reason; others are untouched', () => {
+    const cfg = check({ baseUrl: 'http://x', context: 'a trading tool', expect: [{ match: '^audit: text is not cut off @ Market map', why: 'tiles shorten tickers' }] });
+    assert.equal(cfg.context, 'a trading tool');
+    const f = { suite: 'audit', side: 'member', where: 'Market map · desktop', check: 'text is not cut off', status: 'fail' as const, detail: '22: "MPWR"' };
+    assert.deepEqual(expected(f, cfg.expect), { ...f, status: 'info', detail: 'expected: tiles shorten tickers (was fail: 22: "MPWR")' });
+    for (const other of [{ ...f, where: 'Home · desktop' }, { ...f, status: 'pass' as const }, { ...f, suite: 'a11y' }]) assert.deepEqual(expected(other, cfg.expect), other);
+    assert.deepEqual(check({ baseUrl: 'http://x' }).expect, []);
+    assert.throws(() => check({ baseUrl: 'http://x', expect: { match: 'x' } }), /expect must be a list of \{match, why\}/);
+    assert.throws(() => check({ baseUrl: 'http://x', expect: [{ match: '(', why: 'x' }] }), /expect\[0\]\.match is not a valid regular expression/);
+    assert.throws(() => check({ baseUrl: 'http://x', expect: [{ match: 'x' }] }), /expect\[0\]\.why/);
 });
 
 test('contract: ids normalised, shapes keyed', () => {

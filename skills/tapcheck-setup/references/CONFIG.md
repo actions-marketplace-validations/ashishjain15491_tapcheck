@@ -28,6 +28,8 @@ app:
   allowRemoteReset: false           # true lifts that refusal; only for a remote throwaway copy
 
 audience: a first-time visitor      # default; who the app is for (used in Jev's questions)
+context: …                          # optional: what kind of product it is (see "context and expect" below)
+expect: […]                         # optional: findings that are right for this product (see below)
 
 sides:                              # default: { public: {} }. Names: lowercase letters, digits, dashes;
   public: {}                        #   not crawl, contract, security, a11y, interact, audit, ux, usability, code, flow, jev, measured
@@ -118,6 +120,9 @@ browser leaves every path matching `loginPaths`.
 `suffix` added. Use the second form for pages whose address holds an id. a11y, audit and ux check exactly these
 screens; the crawl starts from them. With no screens, all four use `/`. `purpose` is optional but the five-second test needs it.
 
+An app that routes in the hash (`/#scanner`, `/#/orders`) lists each screen by its hash: each is loaded afresh and
+counts as its own page. Its menu is often buttons, not links, so the crawl can't find those screens by itself.
+
 ## tasks
 
 ```yaml
@@ -163,6 +168,24 @@ menus and dialogs the markup announces (`aria-haspopup`, `aria-expanded="false"`
 border colours against `colors` (hex only), the first font family of each text against `fonts`, corner radii against
 `radii` and paddings, vertical margins and gaps against `spacing`. A value outside its list is a warning in `audit`
 that names the most used offenders; all of them are in `audit.json`.
+
+## context and expect (judged for the kind of product)
+
+```yaml
+context: a dense, real-time trading tool for active traders; market terms, packed tables and a dark theme are intended
+expect:
+  - { match: "^audit: text is not cut off @ Market map", why: "heatmap tiles shorten tickers by design" }
+  - { match: "^ux: heuristic: h8_minimalist", why: "density is the product: traders compare many figures at once" }
+```
+
+`context` goes to Jev with every question, so a screen is judged against what this product's users expect, not a
+first-time visitor's: the jargon of their field counts as their words. Leave it out for a general app.
+
+`expect` is for findings that are right for this product. A fail or warn whose `<suite>: <check> @ <where>` (as the
+report shows it, for example `audit: text is not cut off @ Market map · desktop`) matches `match` is recorded as info,
+with `expected: <why> (was fail: …)`, so it no longer fails the run but stays in the report. Keep each rule narrow (one
+check, on the screens it is right for) and give a reason a reviewer would accept: never use it to hide a real problem,
+such as an accessibility violation, which no product convention excuses. A part that couldn't run can't be expected.
 
 ## gates and routes (the `code` part)
 

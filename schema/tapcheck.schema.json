@@ -28,6 +28,18 @@
             }
         },
         "audience": { "$ref": "#/definitions/text", "description": "Who the app is for, in the words Jev is asked with (\"a shop owner\", \"a nurse on a ward\").", "default": "a first-time visitor" },
+        "context": { "$ref": "#/definitions/text", "description": "What kind of product it is and the conventions its users expect (\"a dense, real-time trading tool; market terms and packed tables are intended\"). Sent to Jev with every question." },
+        "expect": {
+            "description": "Findings that are right for this product: a fail or warn whose \"<suite>: <check> @ <where>\" matches `match` is recorded as info, saying `why`.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["match", "why"],
+                "properties": { "match": { "$ref": "#/definitions/text", "description": "A regular expression (case-insensitive) on \"<suite>: <check> @ <where>\"." }, "why": { "$ref": "#/definitions/text" } }
+            },
+            "default": []
+        },
         "sides": {
             "description": "Each kind of person who sees a different app, by name. Names are lowercase letters, digits and dashes, and can't be a suite or tag name.",
             "type": "object",

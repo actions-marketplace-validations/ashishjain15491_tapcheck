@@ -47,6 +47,9 @@ export type Config = {
     viewports: { name: string; width: number; height: number; mobile: boolean }[];
     out: string;
     audience: string; // who the app is for, in the words Jev is asked with ("a shop owner", "a nurse on a ward")
+    context?: string; // what kind of product it is and the conventions its users expect; sent to Jev with every question
+    // Findings that are right for this product: a fail or warn whose "<suite>: <check> @ <where>" matches is recorded as info, with why.
+    expect: { match: RegExp; why: string }[];
     jev: { budget: number; headers: Record<string, string> }; // budget in USD per run; headers are sent with every Jev request
     i18n: { keys?: string }; // a shell command printing one translation key per line
     // CHANGED=1: which files each suite depends on, as globs on paths from the git root ("*" is every suite). A suite
@@ -222,6 +225,14 @@ function coverage(v: any): Config['coverage'] {
     }) };
 }
 
+function expect(v: any): Config['expect'] {
+    if (v !== undefined && !Array.isArray(v)) fail('expect', 'must be a list of {match, why}');
+    return (v ?? []).map((r: any, i: number) => {
+        if (!r || typeof r !== 'object' || Array.isArray(r)) fail(`expect[${i}]`, 'must be {match, why}');
+        return { match: regex(r.match, `expect[${i}].match`, ''), why: str(r.why, `expect[${i}].why`)! };
+    });
+}
+
 function design(v: any): Config['design'] {
     if (v === undefined) return undefined;
     if (!v || typeof v !== 'object' || Array.isArray(v)) fail('design', 'must be {colors?, fonts?, radii?, spacing?}');
@@ -322,7 +333,7 @@ export function check(raw: any, root = process.cwd()): Config {
         fail('browser', 'must be {args: ["--a-chromium-switch", …]}');
 
     return { root, baseUrl, app, sides, changes, browser: { args }, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows, parallel,
-        mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, jev: { budget, headers },
+        mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, context: str(raw.context, 'context', true), expect: expect(raw.expect), jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
         crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, interact: { max: interactMax, submit: it.submit === true },
         audit: { max: auditMax, skip: au.skip === undefined ? undefined : regex(au.skip, 'audit.skip', '') }, design: design(raw.design), security: { csrf, allowedHosts, publicWrites: s.publicWrites === undefined ? undefined : regex(s.publicWrites, 'security.publicWrites', '') }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };

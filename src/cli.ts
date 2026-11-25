@@ -55,7 +55,7 @@ import { coverage, hits } from './coverage.ts';
 import { routes } from './routes.ts';
 import * as jev from './jev.ts';
 import { loadFlows, runFlow } from './flow.ts';
-import { findings, record, write } from './report.ts';
+import { expected, findings, record, write } from './report.ts';
 import { start as startStub } from './stub.ts';
 import * as code from './suites/code.ts';
 import * as crawl from './suites/crawl.ts';
@@ -142,7 +142,7 @@ if (!chosen.length) {
 }
 console.log(`Running: ${chosen.map((p) => p.name).join(', ')}`);
 
-jev.setup(cfg.jev);
+jev.setup({ ...cfg.jev, context: cfg.context });
 // Why the Jev parts are skipped, or '' when they run. Once the budget is reached it says so, and the rest are skipped too.
 let jevOff = jev.whyOff();
 const jevParts = chosen.filter((p) => p.tags.includes('jev'));
@@ -205,7 +205,7 @@ try {
     if (needsApp) await countdown();
     const codePart = chosen.find((p) => p.suite === 'code');
     if (codePart) {
-        const rec: Run['record'] = (f) => record({ ...f, side: '' });
+        const rec: Run['record'] = (f) => record(expected({ ...f, side: '' }, cfg.expect));
         console.log(`\ncode: ${cfg.gates.length} gate(s)${cfg.routes ? ', routes' : ''}`);
         await runPart(codePart, rec, () => code.run(cfg, dir, rec));
     }
@@ -216,7 +216,7 @@ try {
         mkdirSync(sideDir, { recursive: true });
         console.log(`\n${side.name} at ${side.baseUrl}: ${parts.map(label).join(', ')}`);
         // reached: one list, so the copies the flows running together get (each its own part and step) share it
-        const r: Run = { cfg, side, dir: sideDir, record: (f) => record({ ...f, side: side.name }), crawl: { pages: [], hits: [], done: false }, reached: [] };
+        const r: Run = { cfg, side, dir: sideDir, record: (f) => record(expected({ ...f, side: side.name }, cfg.expect)), crawl: { pages: [], hits: [], done: false }, reached: [] };
         try {
             r.auth = await signIn(cfg, side);
         } catch (e) {

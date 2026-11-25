@@ -9,7 +9,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import type { Page, Request, Response } from 'playwright';
-import { abs, context, facts, guard, host, watch, type Hit, type Run } from '../browser.ts';
+import { abs, context, facts, guard, here, host, load, watch, type Hit, type Run } from '../browser.ts';
 import { coverage, hasParams, routes } from '../routes.ts';
 
 const SLOW_MS = 3000;
@@ -64,23 +64,23 @@ export async function run(r: Run) {
             errors.length = 0;
             const t0 = Date.now();
             let download = false; // a link to a file (a PDF invoice): Playwright downloads it and goto throws
-            const res = await page.goto(abs(r, path), { waitUntil: 'domcontentloaded' }).catch((e: Error) => { download = /Download is starting/.test(e.message); return null; });
+            const res = await load(page, abs(r, path)).catch((e: Error) => { download = /Download is starting/.test(e.message); return null; });
             if (download) continue; // not a page; "in-app links answer" still checks that it answers
             await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
             const ms = Date.now() - t0;
-            const finalPath = new URL(page.url()).pathname;
+            const finalPath = here(page.url(), path);
             const st = res?.status() ?? 0;
             // A route from the list that isn't this side's (refused, sent to sign in) or isn't a page (a download): not a finding.
             if (route && (st === 0 || [401, 403, 404, 405].includes(st) || (r.cfg.loginPaths.test(finalPath) && !r.cfg.loginPaths.test(path)))) continue;
             guard(r, path, page.url());
             const f = await facts(page).catch(() => null);
             const links = [...new Set((f?.controls ?? []).map((c) => c.href).filter((h): h is string => !!h && host(h) === own)
-                .map((h) => { const u = new URL(h); return u.pathname + u.search; }))];
+                .map((h) => { const u = new URL(h); return u.pathname + u.search + (/^#!?\//.test(u.hash) ? u.hash : ''); }))]; // #/orders is a route, #section a place on the page
             r.crawl.pages.push({ path, status: st, finalPath, ms, errors: [...errors], links });
             visits++;
 
             const where = path;
-            r.record({ suite: S, where, check: 'page answers', status: st >= 200 && st < 400 ? 'pass' : 'fail', detail: `${st}${finalPath !== path.split('?')[0] ? ` → ${finalPath}` : ''}` });
+            r.record({ suite: S, where, check: 'page answers', status: st >= 200 && st < 400 ? 'pass' : 'fail', detail: `${st}${finalPath !== path.split('?')[0].replace(/#$/, '') ? ` → ${finalPath}` : ''}` });
             r.record({ suite: S, where, check: `loads under ${SLOW_MS} ms`, status: ms < SLOW_MS ? 'pass' : 'warn', detail: `${ms} ms` });
             r.record({ suite: S, where, check: 'no console or page errors', status: errors.length ? 'fail' : 'pass', detail: errors.slice(0, 3).join(' | ') || undefined });
             if (f?.brokenImages.length) r.record({ suite: S, where, check: 'images load', status: 'fail', detail: f.brokenImages.slice(0, 5).join(', ') });

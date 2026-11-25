@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Hash-routed apps.** A screen at `/#scanner` or `/#/orders` is its own page: it is loaded afresh (so it has an
+  HTTP status, not 0), the crawl keeps it apart from `/` and follows `#/route` links, and `interact` and `audit` treat
+  a new hash as another screen.
+- **Sign-in through Google, Discord and the like.** `login: manual` waits until the browser is back on the app's own
+  site, so a provider's consent page no longer counts as signed in.
+- **interact** never clicks a dark mode, light mode or theme control, which would change the account's settings.
+- **context and expect.** `context:` says what kind of product it is (a dense trading tool, a clinical system) and goes
+  to Jev with every question, so screens are judged against what its users expect. `expect:` lists findings that are
+  right for the product, as `{ match, why }` on `<suite>: <check> @ <where>`: a matching fail or warn is recorded as
+  info with the reason, so it stays in the report without failing the run.
+
 ## 0.1.2 (2026-11-25)
 
 - **GitHub Marketplace.** The Action is named "tapcheck audit", since the Marketplace needs a name no GitHub account

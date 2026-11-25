@@ -165,3 +165,20 @@ test('ux and usability: a tiny page, judged by a fake Jev', async () => {
     assert.ok(log.includes(`${tmp}/shots/ux-home-desktop-1.png`));
     assert.ok(!log.includes('tsk-not-a-real-key') && !log.includes('iVBOR'));
 });
+
+test('jev: context goes to Jev with every question, and the language question counts the field\'s terms', async () => {
+    const sent: any[] = [];
+    setup({ budget: 1, headers: {}, context: 'a dense trading tool' }, { systemOne: async (req) => { sent.push(req.state); return { answers: {}, usage: { input_tokens: 1 } }; } });
+    await ask('one', { screen: 'Home' }, { ok: { type: 'bool' } }, []);
+    assert.deepEqual(sent[0], { product: 'a dense trading tool', screen: 'Home' });
+    const { image } = await import('@typesafe-ai/sdk');
+    const picture = image(Buffer.from('x'));
+    await ask('picture', picture, { ok: { type: 'bool' } }, []);
+    assert.equal(sent[1], picture); // a state that is the image itself goes as it is
+    const { HEURISTICS } = await import('../src/questions.ts');
+    assert.ok(!JSON.stringify(HEURISTICS('traders').h2_language).includes('`product`'));
+    assert.ok(JSON.stringify(HEURISTICS('traders', 'a dense trading tool').h2_language).includes('`product` names count as their own words'));
+    setup({ budget: 1, headers: {} }, { systemOne: async (req) => { sent.push(req.state); return { answers: {}, usage: { input_tokens: 1 } }; } });
+    await ask('two', { screen: 'Home' }, { ok: { type: 'bool' } }, []);
+    assert.deepEqual(sent[2], { screen: 'Home' }); // no context: the state as it was
+});

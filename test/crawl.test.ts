@@ -58,3 +58,22 @@ test('open: a page load that fails once is tried again', async () => {
         await ctx.close();
     } finally { await closeBrowser(); server.close(); }
 });
+
+test('crawl: a hash-routed app gets a page per route, with its status', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-hash-`);
+    // One document; the fragment picks the screen, and its buttons change it, as in an app that routes in the hash.
+    // A #/route link is followed; a #section link is a place on the page.
+    const html = `<!doctype html><html lang="en"><title>t</title><body><h1 id="t"></h1><a href="#/help">Help</a> <a href="#top">Top</a>
+        <script>const show = () => { document.getElementById('t').textContent = location.hash || 'home'; }; addEventListener('hashchange', show); show();</script></body></html>`;
+    const server = createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }).end(html); });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    try {
+        const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }],
+            screens: [{ name: 'Home', path: '/' }, { name: 'Scanner', path: '/#scanner' }, { name: 'Map', path: '/#map' }] }, tmp);
+        const found: Omit<Finding, 'side'>[] = [];
+        const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } };
+        await crawl.run(r);
+        assert.deepEqual(r.crawl.pages.map((p) => [p.path, p.status, p.finalPath]), [['/', 200, '/'], ['/#scanner', 200, '/#scanner'], ['/#map', 200, '/#map'], ['/#/help', 200, '/#/help']]);
+        assert.deepEqual(found.filter((f) => f.check === 'page answers' && f.status !== 'pass'), []);
+    } finally { await closeBrowser(); server.close(); }
+});

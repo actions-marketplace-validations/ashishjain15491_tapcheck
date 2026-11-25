@@ -111,7 +111,7 @@ export const DESIGN = {
 // ───────────────────────────── HEURISTIC EVALUATION (the usability heuristics a screenshot can show) ─────────────────────────────
 // Error recovery, undo and shortcuts for experts need interaction, so the usability suite covers them, not these.
 // `audience` is tapcheck.yml's audience: who the app is for, so plain wording is judged for that reader.
-export const HEURISTICS = (audience: string) => ({
+export const HEURISTICS = (audience: string, context?: string) => ({
     h1_status: score('How well do `screenshots` show where the person is and the state of things (current page, saved or not, loading, counts)?', [
         'Nothing tells the person where they are or what state things are in.',
         'The current page is hard to make out and states are not shown.',
@@ -119,7 +119,7 @@ export const HEURISTICS = (audience: string) => ({
         'The current page and most states are clear.',
         'The current page, item states and any progress are all plain to see.',
     ]),
-    h2_language: score(`How well does the wording in \`screenshots\` use everyday words ${audience} would use?`, [
+    h2_language: score(`How well does the wording in \`screenshots\` use everyday words ${audience} would use?${context ? ' The terms of their field that `product` names count as their own words.' : ''}`, [
         'Much of the wording is technical jargon, codes or internal names.',
         'Several labels use jargon or words that reader would not use.',
         'Mostly plain, with a few technical terms left unexplained.',

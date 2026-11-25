@@ -23,7 +23,7 @@
 import { writeFileSync } from 'node:fs';
 import type { Locator, Page } from 'playwright';
 import { isLocal } from '../config.ts';
-import { context, host, open, reach, SessionExpired, watch, type Run } from '../browser.ts';
+import { context, hashRoute, host, open, reach, SessionExpired, watch, type Run } from '../browser.ts';
 import type { Finding } from '../report.ts';
 import { UNSAFE } from './usability.ts';
 
@@ -166,10 +166,11 @@ export async function run(r: Run) {
         d.dismiss().catch(() => {});
     });
     const wait = async () => { await page.waitForTimeout(WAIT); if (seen.requests) await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {}); };
-    const still = (u: string) => u.split('#')[0];
 
     try {
         for (const path of paths) {
+            // On a hash-routed screen a new hash is another screen; elsewhere a hash is a place on the same page.
+            const still = (u: string) => (hashRoute(path) ? u : u.split('#')[0]);
             const broke: string[] = [], failed: string[] = [], native: string[] = [], dead: string[] = [], clicked: string[] = [];
             const clear = () => { seen.errors.length = seen.bad.length = seen.natives.length = seen.requests = seen.popups = 0; };
             const drain = (label: string) => {

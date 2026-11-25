@@ -17,7 +17,7 @@ import { ask, bad, BudgetReached, good, img, NO } from '../jev.ts';
 import { MAX_STEPS, SCROLL, TASK_Q } from '../questions.ts';
 
 const S = 'usability';
-export const UNSAFE = /\b(delete|remove|destroy|log ?out|sign out|send|publish|unpublish|pay|upgrade|downgrade|cancel|archive|disconnect|revoke|unsubscribe|reset|discard|take down|impersonat)/i;
+export const UNSAFE = /\b(delete|remove|destroy|log ?out|sign out|send|publish|unpublish|pay|upgrade|downgrade|cancel|archive|disconnect|revoke|unsubscribe|reset|discard|take down|impersonat|dark mode|light mode|theme)/i;
 
 type Req = { method: string; url: string; status: number };
 type Click = { step: number; label: string; place: string; x: number; y: number; from: string; to: string; ms: number; dead: boolean; hesitation: number; shot: string; requests: Req[] };

@@ -126,7 +126,7 @@ export async function run(r: Run) {
                     // One request for every judgment over the same screenshots.
                     const a = await ask(key, { screen: s.name, viewport: `${vp.name}, ${vp.width} × ${vp.height} px`, screenshots: shots.map(img),
                         note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined },
-                    { ...VISUAL, ...DESIGN, ...HEURISTICS(r.cfg.audience) }, shots);
+                    { ...VISUAL, ...DESIGN, ...HEURISTICS(r.cfg.audience, r.cfg.context) }, shots);
                     visual(r, S, where, a, shots);
                     for (const k of ['cta', 'cta_label', 'negative_space', 'hierarchy', 'legibility', 'spacing'] as const) scored(r, where, `design: ${k.replace('_', ' ')}`, a[k], shots);
                     const probs = Object.entries(a.density.probabilities ?? {}).map(([k, p]) => `${k} ${(p as number).toFixed(2)}`).join(', ');

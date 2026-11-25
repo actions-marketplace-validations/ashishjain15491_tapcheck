@@ -35,7 +35,11 @@ async function field(page: Page, key: string) {
     return (await byName.count()) ? byName.first() : page.getByLabel(key, { exact: false }).first();
 }
 
-const off = (cfg: Config, u: string) => !cfg.loginPaths.test(new URL(u).pathname);
+/** Signed in at `u`: back on the side's own site (not on a Google, Discord or other sign-in provider's page) and on no sign-in path. */
+export const off = (cfg: Config, side: Side, u: string) => {
+    const url = new URL(u);
+    return url.origin === new URL(side.baseUrl).origin && !cfg.loginPaths.test(url.pathname);
+};
 
 /** The side's saved session file, signing in first when needed; undefined for a side that doesn't sign in. */
 export async function signIn(cfg: Config, side: Side): Promise<string | undefined> {
@@ -61,7 +65,7 @@ export async function signIn(cfg: Config, side: Side): Promise<string | undefine
         const page = await ctx.newPage();
         await page.goto(at(l.manual));
         console.log(`Sign in as ${side.name} in the browser window. Waiting up to 10 minutes…`);
-        await page.waitForURL((u) => off(cfg, u.href), { timeout: 600_000 });
+        await page.waitForURL((u) => off(cfg, side, u.href), { timeout: 600_000 });
         await page.waitForLoadState('networkidle').catch(() => {});
         await ctx.storageState({ path: file });
         await browser.close();
@@ -78,12 +82,12 @@ export async function signIn(cfg: Config, side: Side): Promise<string | undefine
         const submit = () => page.locator(f.submit ?? 'button[type=submit], input[type=submit]').first().click();
         await submit();
         await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-        if (f.totp && !off(cfg, page.url())) {
+        if (f.totp && !off(cfg, side, page.url())) {
             await (await field(page, f.totp.field)).fill(totp(f.totp.secret));
             await submit();
         }
-        await page.waitForURL((u) => off(cfg, u.href), { timeout: 30_000 }).catch(() => {});
-        if (!off(cfg, page.url())) {
+        await page.waitForURL((u) => off(cfg, side, u.href), { timeout: 30_000 }).catch(() => {});
+        if (!off(cfg, side, page.url())) {
             const shot = `${cfg.out}/login-${side.name}-failed.png`;
             await page.screenshot({ path: shot }).catch(() => {});
             throw new Error(`Signing in as ${side.name} left the browser on ${page.url()} (see ${shot}). Check sides.${side.name}.login.form.`);

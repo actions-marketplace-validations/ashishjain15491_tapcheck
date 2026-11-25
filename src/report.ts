@@ -10,6 +10,14 @@ export type Finding = { suite: string; side: string; where: string; check: strin
 export const findings: Finding[] = [];
 export const record = (f: Finding) => { findings.push(f); };
 
+/** tapcheck.yml's expect: a fail or warn whose "<suite>: <check> @ <where>" matches a rule is right for this product. It is
+ * kept as info, saying why and what it was, so the report still shows it and nothing is dropped. */
+export function expected(f: Finding, rules: { match: RegExp; why: string }[]): Finding {
+    if (f.status !== 'fail' && f.status !== 'warn') return f;
+    const rule = rules.find((x) => x.match.test(`${f.suite}: ${f.check} @ ${f.where}`));
+    return rule ? { ...f, status: 'info', detail: `expected: ${rule.why} (was ${f.status}${f.detail ? `: ${f.detail}` : ''})` } : f;
+}
+
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const ORDER = { fail: 0, warn: 1, info: 2, pass: 3 } as const;
 

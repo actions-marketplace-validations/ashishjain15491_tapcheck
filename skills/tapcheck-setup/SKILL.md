@@ -78,6 +78,10 @@ Read the routes file, the navigation template and the seed data. You need:
 - **Screens**: the 3 to 8 pages that matter most on each side, each with a `purpose`.
 - **Tasks**: 1 to 3 things a first-time user comes to do, reachable by clicking alone.
 - **Audience**: who the app is for, in a few words.
+- **Context**, for a specialist product (a trading terminal, a clinical system, a developer console): what kind of
+  product it is and what its users expect, so Jev doesn't judge it as a consumer app. Leave it out for a general app.
+  Add `expect` rules only after a first run, for findings the user agrees are right for the product, each narrow and
+  with its reason; never for accessibility, security or a broken page (CONFIG.md, "context and expect").
 
 `references/QUESTIONS.md` says how to word purposes, tasks and the audience; read it before writing them. Ask the
 user only what the code can't tell you (who the audience is, which test user to use).

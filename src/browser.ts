@@ -168,10 +168,26 @@ export function guard(r: Run, requested: string, landed: string) {
     }
 }
 
+/** A hash route (`/#scanner`, `/#/orders`): an app that routes in the fragment shows a different screen for each. */
+export const hashRoute = (path: string) => /#[!/]?[A-Za-z]/.test(path);
+
+/** Where the page is, as a path: the hash too when `path` (what was asked for) is a hash route. */
+export function here(url: string, path: string) {
+    const u = new URL(url);
+    return u.pathname + (hashRoute(path) ? u.hash : '');
+}
+
+/** page.goto as a document load. Going to another hash of the page that's open only changes the fragment: the browser
+ * sends nothing, so there is no response (status 0) and the app may not start afresh. Leave the page first. */
+export async function load(page: Page, url: string, opts: Parameters<Page['goto']>[1] = { waitUntil: 'domcontentloaded' }) {
+    if (url.includes('#') && page.url().split('#')[0] === url.split('#')[0]) await page.goto('about:blank');
+    return page.goto(url, opts);
+}
+
 /** Opens a page of the app and waits for it to settle. A load that fails (a timeout on a busy app, a navigation
  * aborted or cut short by another) is tried once more before the error counts; a download is not a page and isn't. */
 export async function open(r: Run, page: Page, path: string) {
-    const go = () => page.goto(abs(r, path), { waitUntil: 'domcontentloaded' });
+    const go = () => load(page, abs(r, path));
     const res = await go().catch(async (e: Error) => {
         if (/Download is starting/.test(e.message)) throw e;
         await page.waitForTimeout(1000);

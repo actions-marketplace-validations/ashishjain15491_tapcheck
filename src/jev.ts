@@ -40,14 +40,14 @@ export function apiKey(): string | undefined {
 /** Why Jev isn't asked in this run ('JEV=off', no key), or '' when it is. */
 export const whyOff = () => (process.env.JEV === 'off' ? 'JEV=off' : client || apiKey() ? '' : 'no TYPESAFE_API_KEY');
 
-let opts: Config['jev'] = { budget: 1, headers: {} };
+let opts: Config['jev'] & { context?: string } = { budget: 1, headers: {} };
 let client: Client | null = null;
 let tokens = 0, calls = 0, cached = 0, ms = 0;
 export const payloads: unknown[] = [];
 const memo = new Map<string, any>();
 
 /** Starts a run: its budget and headers, counters and memo cleared. A self-check passes a fake client; nothing then reaches the network. */
-export function setup(jev: Config['jev'], fake?: Client) {
+export function setup(jev: Config['jev'] & { context?: string }, fake?: Client) {
     opts = jev;
     client = fake ?? null;
     tokens = calls = cached = ms = 0;
@@ -57,6 +57,9 @@ export function setup(jev: Config['jev'], fake?: Client) {
 
 /** One Jev request. `images` are the files behind the images in `state`: they key the memo and stand in for the bytes in the log. */
 export async function ask(label: string, state: unknown, questions: Record<string, any>, images: string[], model?: string): Promise<any> {
+    // tapcheck.yml's context: the kind of product, so every judgment is made against what its users expect.
+    // Only a plain record of fields: a request whose state is the image itself (predicted attention) is left as it is.
+    if (opts.context && state && Object.getPrototypeOf(state) === Object.prototype) state = { product: opts.context, ...state };
     const shown = JSON.parse(JSON.stringify(state)); // the SDK writes each image as a short "<image:…>" name here, never its bytes
     const hash = createHash('sha256').update(JSON.stringify([model, shown, questions]));
     for (const f of images) hash.update(readFileSync(f));
