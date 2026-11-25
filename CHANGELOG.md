@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 (2026-11-25)
+
+No change to what tapcheck checks or how it runs.
+
+- **README and logo.** A shorter README in the usual layout, with the tapcheck logo (light and dark), a report
+  screenshot and badges; the logo kit is in `assets/`. The Codex plugin and the Action use the brand colour.
+- **GitHub Marketplace.** The Action's description fits the Marketplace's 125 characters.
+- **Releases from GitHub.** `.github/workflows/publish.yml` publishes to npm when a release is published, through npm
+  trusted publishing with provenance; the release steps are in `CONTRIBUTING.md`.
+- **Repository.** Dependabot updates, a security policy, issue forms, a pull request template and a code of conduct.
+
 ## 0.1.0 (2026-11-25)
 
 The first release: on npm as `@ashishjain15491/tapcheck` (the CLI is still `tapcheck`), and as the GitHub Action `ashishjain15491/tapcheck@v0.1.0`.

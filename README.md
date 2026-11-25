@@ -23,7 +23,7 @@ npx playwright install chromium                                 # once
 npx tapcheck                                                    # in the folder with tapcheck.yml
 ```
 
-Or without installing: `npx @ashishjain15491/tapcheck@0.1.0`. A minimal `tapcheck.yml`:
+Or without installing: `npx @ashishjain15491/tapcheck@0.1.1`. A minimal `tapcheck.yml`:
 
 ```yaml
 baseUrl: http://127.0.0.1:8000
@@ -76,7 +76,7 @@ fails. `changed: base` checks only what the pull request changed (with `fetch-de
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: ashishjain15491/tapcheck@v0.1.0
+- uses: ashishjain15491/tapcheck@v0.1.1
   env:
     TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}   # optional
 ```

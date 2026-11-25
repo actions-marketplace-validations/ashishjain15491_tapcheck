@@ -26,5 +26,5 @@ body:
     attributes:
       label: Version
       description: tapcheck version or Action tag, Node.js version and OS (or Docker).
-      placeholder: 0.1.0, Node.js 24, macOS 15
+      placeholder: 0.1.1, Node.js 24, macOS 15
     validations: { required: true }

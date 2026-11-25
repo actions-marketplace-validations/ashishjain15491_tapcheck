@@ -1,5 +1,5 @@
 name: tapcheck
-description: 'End-to-end and UI audit of a running web app: crawl, API contract, security, accessibility, and Jev judgments of what people see.'
+description: "End-to-end and UI audit of a running web app: crawl, API contract, security, accessibility, and Jev's look at the UI."
 author: ashishjain15491
 branding:
   icon: check-circle
@@ -8,7 +8,7 @@ branding:
 # The job must make the app reachable first: either tapcheck.yml has an app.start the runner can run, or an earlier
 # step started it. Jev (the ux and usability suites) runs only when the caller passes the key:
 #
-#   - uses: ashishjain15491/tapcheck@v0.1.0
+#   - uses: ashishjain15491/tapcheck@v0.1.1
 #     env:
 #       TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
 #
