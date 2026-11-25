@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0 (pre-release)
+## 0.1.0 (2026-11-25)
 
-The first version. Not yet published to npm.
+The first release: on npm as `tapcheck`, and as the GitHub Action `ashishjain15491/tapcheck@v0.1.0`.
 
 - **Core harness.** One `tapcheck.yml` describes the app: how to start, stop and reset it, its sides and how each
   signs in (`none`, `manual`, `form` with optional TOTP, `command`), screens, tasks and viewports. `$NAME` values come
@@ -13,7 +13,7 @@ The first version. Not yet published to npm.
   `contract` (API status, JSON that parses, latency, response shape against a saved baseline), `security` (headers,
   cookie flags, pages that need sign-in, CSRF, served secrets, third-party requests) and `a11y` (axe-core WCAG 2.2
   A/AA, keyboard focus, page language).
-- **Interaction and UI audit suites (unreleased additions).** `interact` clicks every safe control on the crawled
+- **Interaction and UI audit suites.** `interact` clicks every safe control on the crawled
   screens and reports page errors, 5xx answers, native dialogs and controls that do nothing; checks each dialog it
   opens (accessible name, focus, Escape, an error state for invalid input) and each table's sorting, search, paging
   and row menu; and writes `interact.json`. `audit` is the full UI audit per screen: desktop light and dark, tablet
@@ -21,7 +21,7 @@ The first version. Not yet published to npm.
   adherence, and Jev's look when Jev is on; it writes `audit.json`. New keys: `interact: {max, submit}`,
   `audit: {max, skip}`, `design: {colors, fonts, radii, spacing}`. `interact.submit: true` changes data and is for a
   throwaway database only.
-- **Run-level additions (unreleased).** `HEADED=1`, `SLOWMO=<ms>` and `START_DELAY=<s>` for watching a run;
+- **Run-level additions.** `HEADED=1`, `SLOWMO=<ms>` and `START_DELAY=<s>` for watching a run;
   `RECORD=1` for a video and a Playwright trace of every browser context, linked from the report. Flows get
   `t.jev(label, questions?)` (Jev's look at the current page) and `t.mail.judge(mail, questions?)` (at an email), both
   skipped cleanly with `JEV=off`. Every run writes `hits.json` per side, and `COVERAGE=1` merges all runs into
@@ -45,7 +45,7 @@ The first version. Not yet published to npm.
   `tapcheck.yml`; a Docker image on the official Playwright image; a GitHub Action that runs tapcheck, writes the
   job summary and uploads the run folder; CI with a type check. A missing Chromium is now one line naming the
   command that installs it, and `CHANGED=1` works where git has no author configured (containers, CI runners).
-- **Fixes from the first real project (unreleased).** The crawl follows the links it finds before the route list, and
+- **Fixes from the first real project.** The crawl follows the links it finds before the route list, and
   only pages it actually crawled count toward `crawl.max` (a long route list used to crowd the links out). The
   signed-out check follows redirects, so `/` → `/admin` → `/login` counts as refused. A CSRF token cookie
   (`XSRF-TOKEN`, `csrftoken`) may be readable by script. The CSRF probe goes to the sides that sign in (every side

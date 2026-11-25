@@ -16,7 +16,7 @@ installs its dependencies and a browser). Options are environment variables in f
 that holds `tapcheck.yml`; if that file is missing, stop and use the `tapcheck-setup` skill.
 
 If there is no `bin/tapcheck` there (the skill was copied on its own), `npx tapcheck@<version>` is the same CLI from
-npm once it is published; see the `tapcheck-setup` skill.
+npm; see the `tapcheck-setup` skill.
 
 ## 1. Choose the parts
 

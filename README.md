@@ -4,8 +4,8 @@ End-to-end and UI audit harness for any web app, whatever its language or stack.
 browser, measures what code can measure, and asks Jev to judge what needs a human eye. One file, `tapcheck.yml`,
 describes the app; one run writes one report.
 
-Status: **0.1.0, pre-release.** It works from a checkout and as a plugin today. The npm package, the Docker image and
-the action tag are published with the first release; the commands below are the ones that will work then.
+Status: **0.1.0.** It runs from a checkout, as a plugin, from npm (`npx tapcheck@0.1.0`), as the GitHub Action
+(`ashishjain15491/tapcheck@v0.1.0`) and as a Docker image you build from the checkout.
 
 ## What it checks
 

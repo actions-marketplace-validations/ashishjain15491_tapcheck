@@ -13,7 +13,7 @@ The findings are evidence about the app. The work here is to change the app so t
 to prove it by running the same check again.
 
 `TAPCHECK` below stands for `<this skill's base directory>/../../bin/tapcheck`; run it from the folder that holds
-`tapcheck.yml`. (No `bin/tapcheck` there: `npx tapcheck@<version>` from npm, once published; see `tapcheck-setup`.)
+`tapcheck.yml`. (No `bin/tapcheck` there: `npx tapcheck@<version>` from npm; see `tapcheck-setup`.)
 
 ## Hard rules
 
