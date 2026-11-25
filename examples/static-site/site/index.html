@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Acme Plants</title>
+    <style>
+        body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1f2937; }
+        header, main, footer { max-width: 720px; margin: 0 auto; padding: 16px; }
+        nav a { margin-right: 16px; }
+        a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+        .stat { font-size: 32px; font-weight: 700; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav aria-label="Main"><a href="/">Home</a><a href="/plants.html">Plants</a><a href="/contact.html">Contact</a></nav>
+    </header>
+    <main>
+        <h1>Acme Plants</h1>
+        <p>House plants delivered to your door, with care notes for every one.</p>
+        <p><span class="stat" id="count">…</span> plants delivered this month.</p>
+        <p><a href="/contact.html">Ask us about a plant</a></p>
+    </main>
+    <footer><p>Acme Plants is a fictional shop used to show tapcheck.</p></footer>
+    <script>
+        fetch('/data/stats.json').then((r) => r.json()).then((s) => { document.getElementById('count').textContent = s.delivered; });
+    </script>
+</body>
+</html>

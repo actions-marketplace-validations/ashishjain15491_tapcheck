@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Plants · Acme Plants</title>
+    <style>
+        body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1f2937; }
+        header, main { max-width: 720px; margin: 0 auto; padding: 16px; }
+        nav a { margin-right: 16px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #d1d5db; }
+        label { display: block; margin-top: 12px; }
+        input, button { font: inherit; padding: 8px; min-height: 24px; }
+        dialog { border: 1px solid #6b7280; border-radius: 8px; padding: 16px; max-width: 320px; }
+        a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav aria-label="Main"><a href="/">Home</a><a href="/plants.html">Plants</a><a href="/contact.html">Contact</a></nav>
+    </header>
+    <main>
+        <h1>Our plants</h1>
+        <table>
+            <thead>
+                <tr><th aria-sort="ascending"><button type="button" data-sort="0">Plant</button></th><th aria-sort="none"><button type="button" data-sort="1">Light</button></th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Boston fern</td><td>Shade</td></tr>
+                <tr><td>Jade plant</td><td>Sun</td></tr>
+                <tr><td>Peace lily</td><td>Half shade</td></tr>
+            </tbody>
+        </table>
+        <p><button type="button" id="open-notes" aria-haspopup="dialog">Get care notes</button></p>
+        <dialog id="notes" aria-labelledby="notes-title">
+            <h2 id="notes-title">Care notes by email</h2>
+            <form method="dialog">
+                <label for="notes-email">Your email</label>
+                <input id="notes-email" name="email" type="email" autocomplete="email" required>
+                <p><button type="submit">Sign up</button> <button type="button" id="close-notes">Close</button></p>
+            </form>
+        </dialog>
+    </main>
+    <script>
+        // Sort the table by the clicked column; a second click on the same column turns it round.
+        for (const button of document.querySelectorAll('[data-sort]')) {
+            button.addEventListener('click', () => {
+                const th = button.closest('th'), body = document.querySelector('tbody'), col = Number(button.dataset.sort);
+                const down = th.getAttribute('aria-sort') === 'ascending';
+                document.querySelectorAll('th').forEach((h) => h.setAttribute('aria-sort', 'none'));
+                th.setAttribute('aria-sort', down ? 'descending' : 'ascending');
+                body.append(...[...body.rows].sort((a, b) => a.cells[col].textContent.localeCompare(b.cells[col].textContent) * (down ? -1 : 1)));
+            });
+        }
+        const notes = document.getElementById('notes');
+        document.getElementById('open-notes').addEventListener('click', () => notes.showModal());
+        document.getElementById('close-notes').addEventListener('click', () => notes.close());
+    </script>
+</body>
+</html>

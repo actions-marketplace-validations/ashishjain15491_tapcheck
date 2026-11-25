@@ -1,0 +1,13 @@
+{
+    "name": "tapcheck",
+    "version": "0.1.0",
+    "description": "End-to-end and UI audit for any web app, whatever its stack. Skills set tapcheck up for your project, run it, and fix what it finds.",
+    "author": {
+        "name": "ashishjain15491",
+        "url": "https://github.com/ashishjain15491"
+    },
+    "homepage": "https://github.com/ashishjain15491/tapcheck",
+    "repository": "https://github.com/ashishjain15491/tapcheck",
+    "license": "MIT",
+    "keywords": ["e2e", "testing", "accessibility", "ui-audit", "playwright"]
+}

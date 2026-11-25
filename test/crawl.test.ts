@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { after, test } from 'node:test';
+import { closeBrowser, context, open, type Run } from '../src/browser.ts';
+import { check } from '../src/config.ts';
+import type { Finding } from '../src/report.ts';
+import * as crawl from '../src/suites/crawl.ts';
+
+test('crawl: the route list seeds the queue and gives route coverage', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-crawl-`);
+    const asked: string[] = [];
+    const page = (body: string) => `<!doctype html><html lang="en"><title>t</title><body><h1>t</h1>${body}</body></html>`;
+    const server = createServer((req, res) => {
+        asked.push(req.url!);
+        if (req.url === '/invoices/7/file') return res.writeHead(200, { 'content-type': 'application/pdf', 'content-disposition': 'attachment; filename="invoice.pdf"' }).end('%PDF-1.4');
+        const html = ({ '/': page('<a href="/plants/7">Fern</a> <a href="/invoices/7/file">Invoice</a>'), '/plants/7': page('fern'), '/about': page('about'), '/admin': null, '/account': page('mine') } as Record<string, string | null>)[req.url!];
+        res.writeHead(html ? 200 : html === null ? 403 : 404, { 'content-type': 'text/html' }).end(html ?? 'no');
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    after(async () => { await closeBrowser(); server.close(); });
+    const routes = [{ method: 'GET', path: '/' }, { method: 'GET', path: 'about' }, { method: 'GET', path: '/admin' }, { method: 'GET', path: '/plants/{id}' },
+        { method: 'GET', path: '/plants/{id}/care' }, { method: 'GET', path: '/export' }, { method: 'POST', path: '/plants' }, { method: 'GET', path: '/account', auth: true }];
+    const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, routes: `echo '${JSON.stringify(routes)}'`, viewports: [{ name: 'desktop', width: 800, height: 600 }] }, tmp);
+    const found: Omit<Finding, 'side'>[] = [];
+    const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } };
+    await crawl.run(r);
+
+    // Links first, then routes: /about is only in the route list; /admin refuses this side and is no finding (nor does it use up
+    // crawl.max); /export matches crawl.skip and is never asked for; /account needs sign-in and this side has none, so it isn't
+    // asked for either. /invoices/7/file is a download: no page and no finding, but its link is checked.
+    assert.deepEqual(r.crawl.pages.map((p) => p.path), ['/', '/plants/7', '/about']);
+    assert.ok(asked.includes('/admin') && !asked.includes('/export') && !asked.includes('/plants') && !asked.includes('/account'));
+    assert.ok(asked.includes('/invoices/7/file'));
+    assert.deepEqual(found.filter((f) => f.status === 'fail'), []);
+    assert.deepEqual(found.find((f) => f.check === 'route coverage'), { suite: 'crawl', where: 'routes', check: 'route coverage', status: 'info',
+        detail: `3/6 GET routes reached; unreached in ${tmp}/missed-routes.json` });
+    assert.deepEqual(JSON.parse(readFileSync(`${tmp}/missed-routes.json`, 'utf8')), ['/admin', '/plants/{id}/care', '/account']);
+});
+
+test('open: a page load that fails once is tried again', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-open-`);
+    let tries = 0;
+    const server = createServer((req, res) => {
+        if (req.url === '/flaky' && ++tries === 1) return req.socket.destroy(); // the first answer never comes
+        res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>t</title><h1>ok</h1>');
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    try {
+        const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }] }, tmp);
+        const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: () => {}, crawl: { pages: [], hits: [], done: false } };
+        const ctx = await context(r, cfg.viewports[0]);
+        const res = await open(r, await ctx.newPage(), '/flaky');
+        assert.equal(res?.status(), 200);
+        assert.equal(tries, 2);
+        await ctx.close();
+    } finally { await closeBrowser(); server.close(); }
+});

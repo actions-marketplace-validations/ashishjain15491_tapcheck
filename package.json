@@ -1,0 +1,59 @@
+{
+    "name": "tapcheck",
+    "version": "0.1.0",
+    "description": "End-to-end and UI audit harness for any web app, whatever its stack: crawl, API contract, security, accessibility, and Jev judgments of what people see.",
+    "license": "MIT",
+    "author": "ashishjain15491 (https://github.com/ashishjain15491)",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/ashishjain15491/tapcheck.git"
+    },
+    "homepage": "https://github.com/ashishjain15491/tapcheck",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/flow.d.ts",
+            "default": "./dist/flow.js"
+        }
+    },
+    "types": "dist/flow.d.ts",
+    "bin": {
+        "tapcheck": "dist/cli.js"
+    },
+    "files": [
+        "dist",
+        "schema",
+        "README.md",
+        "LICENSE",
+        "CHANGELOG.md"
+    ],
+    "engines": {
+        "node": ">=22.18.0"
+    },
+    "scripts": {
+        "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+        "typecheck": "tsc -p tsconfig.json",
+        "test": "node --test test/*.test.ts",
+        "prepack": "npm run build",
+        "check-public": "scripts/check-public.sh"
+    },
+    "dependencies": {
+        "@typesafe-ai/sdk": "0.7.0",
+        "axe-core": "4.14.1",
+        "playwright": "1.65.1",
+        "yaml": "2.9.1"
+    },
+    "devDependencies": {
+        "@types/node": "22.20.5",
+        "typescript": "7.0.2"
+    },
+    "keywords": [
+        "e2e",
+        "testing",
+        "accessibility",
+        "ui-audit",
+        "playwright",
+        "security",
+        "crawl"
+    ]
+}

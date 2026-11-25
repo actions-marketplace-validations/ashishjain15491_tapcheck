@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../../schema/tapcheck.schema.json
+# A static site with no sign-in. Run from this folder:  node ../../src/cli.ts
+baseUrl: http://127.0.0.1:8765
+app:
+  start: python3 -m http.server 8765 --bind 127.0.0.1 --directory site
+  ready: /
+audience: someone buying a house plant for the first time
+screens:
+  - { name: Home, path: /, purpose: see what the shop sells and how busy it is }
+  - { name: Plants, path: /plants.html, purpose: compare the plants and how much light each needs }
+  - { name: Contact, path: /contact.html, purpose: ask the shop a question }
+tasks:
+  - name: Ask a question
+    from: /
+    goal: Find where to ask the shop a question about a plant.
+    done: A contact form with a field for the question is open.
+    notDone: It shows the home page, a different page, or an error.
+    optimal: 1
+crawl:
+  max: 20
+# The project's own checks: any command, exit 0 passes. Runs as the part `code`, with no app and no browser.
+gates:
+  - { name: every page declares HTML5, run: "! grep -L '<!doctype html>' site/*.html | grep ." }
+# The site's routes, for route coverage in the crawl. A real app prints these with its framework's route lister.
+routes: cat routes.json
+# A stand-in for the outside services an app calls; the example flow asks it for a plant.
+stub:
+  port: 8766
+  rules:
+    - { host: api.example.com, path: /v1/plants/*, json: { name: Boston fern, light: shade } }
+  # DNS too, for an app that looks up domains: its address is TAPCHECK_DNS (127.0.0.1:8767, the default port).
+  dns:
+    port: 8767
+    records:
+      - { name: shop.example.com, type: TXT, values: ["plant-shop-verification=fern"] }
+# COVERAGE=1 merges what every run reached into one map: each route above with the part that reached it, or GAP.
+coverage:
+  file: .tapcheck/COVERAGE.md
+# Journeys written for this site. Unlike the suites, a flow may submit forms and change data.
+flows: tests/tapcheck/*.ts

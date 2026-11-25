@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Contact · Acme Plants</title>
+    <style>
+        body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1f2937; }
+        header, main { max-width: 720px; margin: 0 auto; padding: 16px; }
+        nav a { margin-right: 16px; }
+        label { display: block; margin-top: 12px; }
+        input, textarea, button { font: inherit; padding: 8px; min-height: 24px; }
+        a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav aria-label="Main"><a href="/">Home</a><a href="/plants.html">Plants</a><a href="/contact.html">Contact</a></nav>
+    </header>
+    <main>
+        <h1>Contact us</h1>
+        <form action="/" method="get">
+            <label for="email">Your email</label>
+            <input id="email" name="email" type="email" autocomplete="email">
+            <label for="question">Your question</label>
+            <textarea id="question" name="question" rows="4"></textarea>
+            <p><button type="submit">Send question</button></p>
+        </form>
+    </main>
+</body>
+</html>

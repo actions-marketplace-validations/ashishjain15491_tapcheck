@@ -1,0 +1,17 @@
+{
+    "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+    "name": "tapcheck",
+    "description": "End-to-end and UI audit harness for any web app, with skills to set it up, run it and fix what it finds.",
+    "owner": {
+        "name": "ashishjain15491",
+        "url": "https://github.com/ashishjain15491"
+    },
+    "plugins": [
+        {
+            "name": "tapcheck",
+            "description": "End-to-end and UI audit for any web app: crawl, API contract, security, accessibility, and Jev judgments of what people see.",
+            "source": "./",
+            "category": "testing"
+        }
+    ]
+}
