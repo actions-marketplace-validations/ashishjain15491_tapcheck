@@ -15,27 +15,6 @@ End-to-end and UI audit for any web app, whatever its language or stack. tapchec
 browser, measures what code can measure, and asks Jev to judge what needs a human eye. One file, `tapcheck.yml`,
 describes the app; one run writes one report.
 
-## Quick start
-
-```bash
-npm install --save-dev tapcheck@npm:@ashishjain15491/tapcheck   # Node.js 22.18 or newer
-npx playwright install chromium                                 # once
-npx tapcheck                                                    # in the folder with tapcheck.yml
-```
-
-Or without installing: `npx @ashishjain15491/tapcheck@0.1.1`. A minimal `tapcheck.yml`:
-
-```yaml
-baseUrl: http://127.0.0.1:8000
-app:
-  start: npm start          # skipped when the app already answers; stopped after the run
-screens:
-  - { name: Home, path: /, purpose: see what the shop sells }
-```
-
-Only `baseUrl` is required. Every key is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md), with
-[recipes per stack](skills/tapcheck-setup/references/stacks) and a [working example](examples/static-site).
-
 ## What it checks
 
 | Suite | Judged by | What it reports |
@@ -55,39 +34,135 @@ Each suite runs once per side (`public`, `customer`, `admin`: each kind of perso
 with probabilities and code decides: a clear answer passes or fails, an unsure one is a warning. Without a Jev key the
 Jev parts are skipped and everything else runs.
 
-Runs take options as environment variables, for example `ONLY=a11y`, `SKIP=jev`, `CHANGED=origin/main` (only what a
-branch changed), `PARALLEL=4` (flows at once) or `LIST=1`. The full list is in
-[CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
+## Install
 
-## Other ways to run it
+Pick one. Each runs the same CLI.
 
-**Claude Code and Codex plugin.** Three skills set tapcheck up for your app, run it and fix what it finds
-([AGENTS.md](AGENTS.md) has the same steps for any agent):
+**Claude Code or Codex plugin.** Three skills set tapcheck up for your app, run it and fix what it finds. In Claude
+Code:
 
 ```
-/plugin marketplace add ashishjain15491/tapcheck     # Claude Code
+/plugin marketplace add ashishjain15491/tapcheck
 /plugin install tapcheck@tapcheck
-codex plugin marketplace add ashishjain15491/tapcheck && codex plugin add tapcheck@tapcheck     # Codex
 ```
 
-**GitHub Action.** It adds the report to the job summary, uploads the run folder and fails the step when a check
-fails. `changed: base` checks only what the pull request changed (with `fetch-depth: 0`). Inputs are in
-[action.yml](action.yml).
+In Codex:
+
+```bash
+codex plugin marketplace add ashishjain15491/tapcheck
+codex plugin add tapcheck@tapcheck
+```
+
+Any other agent can follow the same steps from [AGENTS.md](AGENTS.md). The plugin needs Node.js 23.6 or newer; its
+first run installs its own dependencies and Chromium.
+
+**npm.** Node.js 22.18 or newer:
+
+```bash
+npm install --save-dev tapcheck@npm:@ashishjain15491/tapcheck
+npx playwright install chromium     # once
+```
+
+Or run it without installing: `npx @ashishjain15491/tapcheck@0.1.1`.
+
+**GitHub Action** and **Docker**: see [Run it](#3-run-it) below.
+
+## Set up
+
+### 1. Write tapcheck.yml
+
+**With the plugin**, ask your agent to *"Set up tapcheck for this app"*. The `tapcheck-setup` skill detects the
+stack, writes `tapcheck.yml` (how to start the app, who signs in, the screens and tasks that matter, your linters as
+gates), adds `.tapcheck/` and `.env` to `.gitignore`, and gets a first run through. It tells you which variables to
+set; it never asks for a password or key in chat.
+
+**By hand**, put `tapcheck.yml` in the project root. Only `baseUrl` is required:
+
+```yaml
+baseUrl: http://127.0.0.1:8000
+app:
+  start: npm start                  # skipped when the app already answers; stopped after the run
+audience: a shop owner who is not technical
+screens:                            # what Jev looks at; the crawl finds the rest
+  - { name: Home, path: /, purpose: see what the shop sells }
+tasks:                              # what the simulated first-time user tries
+  - name: Find the opening hours
+    from: /
+    goal: Find when the shop is open on Saturday.
+    done: A page showing the opening hours is open.
+    notDone: It shows the home page, another page, or an error.
+    optimal: 1                      # the fewest clicks that reach it
+```
+
+Then add `.tapcheck/` (reports, screenshots, signed-in sessions) and `.env` to `.gitignore`. Every key is in
+[CONFIG.md](skills/tapcheck-setup/references/CONFIG.md), with
+[recipes per stack](skills/tapcheck-setup/references/stacks) (Laravel, Django, Rails, Express and Next.js, Go, static
+sites) and a [working example](examples/static-site).
+
+**Signed-in pages.** Give each kind of user a side with a `login`, and keep credentials out of the file: write
+`$NAME` and set the variable when you run. A missing one stops the run.
+
+```yaml
+sides:
+  public: {}
+  customer:
+    login:
+      form: { url: /login, fields: { email: $TAPCHECK_EMAIL, password: $TAPCHECK_PASSWORD } }
+```
+
+### 2. Add the Jev key (optional)
+
+`ux`, `usability` and `audit`'s look at each screen ask Jev, a paid model from [TypeSafe](https://docs.typesafe.ai).
+Without a key those are skipped and everything else runs. With one:
+
+| Where you run | Put the key |
+|---|---|
+| your machine, the plugin or npm | `TYPESAFE_API_KEY=…` in `.env` next to `tapcheck.yml` (git-ignored), or `export TYPESAFE_API_KEY=…` |
+| GitHub Actions | a repository secret `TYPESAFE_API_KEY`, passed as `env:` on the step (below) |
+| Docker | `-e TYPESAFE_API_KEY` on `docker run`, with the variable set in your shell |
+
+A run stops asking once it has spent `jev.budget` US dollars (default 1; `JEV_BUDGET=0.25` for one run), and
+`JEV=off` turns Jev off. Only the key is read from `.env`; sign-in variables come from the environment.
+
+### 3. Run it
+
+**Plugin:** ask *"Run tapcheck on what I changed"*, or *"Fix the tapcheck failures"* to have it fix your code and
+rerun until each check passes.
+
+**npm:** from the folder with `tapcheck.yml`:
+
+```bash
+npx tapcheck                         # everything
+ONLY=a11y,security npx tapcheck      # some parts
+CHANGED=origin/main npx tapcheck     # only what this branch changed
+```
+
+**GitHub Action:** the job has to install what `app.start` needs first. It adds the report to the job summary,
+uploads the run folder and fails the step when a check fails; inputs are in [action.yml](action.yml).
 
 ```yaml
 - uses: actions/checkout@v4
+  with: { fetch-depth: 0 }            # for changed: base
+# …install your app's language, dependencies and a test database…
 - uses: ashishjain15491/tapcheck@v0.1.1
+  with:
+    changed: base                     # optional: only what the pull request changed
   env:
     TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}   # optional
+    TAPCHECK_EMAIL: ${{ secrets.TAPCHECK_EMAIL }}       # whatever your tapcheck.yml asks for
+    TAPCHECK_PASSWORD: ${{ secrets.TAPCHECK_PASSWORD }}
 ```
 
-**Docker.** The image has Node.js, Chromium and tapcheck, not your app's runtime, so start the app outside it and
-point `baseUrl` at `host.docker.internal` (macOS, Windows) or add `--network host` (Linux).
+**Docker:** the image has Node.js, Chromium and tapcheck but not your app's runtime, so start the app outside it and
+point `baseUrl` at `host.docker.internal` (macOS, Windows) or add `--network host` (Linux):
 
 ```bash
 git clone https://github.com/ashishjain15491/tapcheck && docker build -t tapcheck tapcheck
-docker run --rm --ipc=host -v "$PWD:/work" -w /work tapcheck
+docker run --rm --ipc=host -e TYPESAFE_API_KEY -v "$PWD:/work" -w /work tapcheck
 ```
+
+Options are environment variables (`ONLY`, `SKIP`, `CHANGED`, `PARALLEL=4` for flows at once, `LIST=1` to list the
+parts); the full list is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
 
 ## Output
 
@@ -98,10 +173,6 @@ Each run writes `.tapcheck/run-<time>/` (git-ignore it): `report.html`, `REPORT.
 one does, and 2 when the run couldn't start.
 
 ## Jev and your data
-
-The `ux` and `usability` suites and `audit`'s looks ask Jev, a paid model from TypeSafe. Set `TYPESAFE_API_KEY` in the
-environment or a `.env` next to `tapcheck.yml`; `JEV=off` turns it off. A run stops asking at `jev.budget` US dollars
-(default 1).
 
 Jev is sent screenshots of the configured screens, tasks, menus and dialogs, with the screen names, purposes, tasks and
 visible control labels. No page source, cookies, sessions or environment variables. `payloads.json` in the run folder
