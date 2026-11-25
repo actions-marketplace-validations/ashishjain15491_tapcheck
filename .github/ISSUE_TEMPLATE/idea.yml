@@ -1,0 +1,15 @@
+name: Idea
+description: A check, option or stack recipe that tapcheck should have.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to catch or do
+      description: The problem in your app or workflow, and what tapcheck misses today.
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: Optional. The finding you'd expect, or the tapcheck.yml key you have in mind.

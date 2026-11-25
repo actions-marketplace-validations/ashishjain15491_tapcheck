@@ -1,0 +1,30 @@
+name: Bug
+description: tapcheck did something wrong, or a check gave the wrong answer.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you got instead. A finding that is wrong counts.
+    validations: { required: true }
+  - type: textarea
+    id: config
+    attributes:
+      label: tapcheck.yml and command
+      description: The parts of tapcheck.yml that matter (no secrets) and the command or Action step, with its options.
+      render: yaml
+    validations: { required: true }
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The console output, and the finding from REPORT.md or findings.json if it's about a check.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: tapcheck version or Action tag, Node.js version and OS (or Docker).
+      placeholder: 0.1.0, Node.js 24, macOS 15
+    validations: { required: true }
