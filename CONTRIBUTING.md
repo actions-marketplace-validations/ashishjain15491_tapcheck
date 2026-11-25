@@ -59,3 +59,18 @@ published: `npm pack --dry-run`.
 | `bin/tapcheck` | the launcher the skills use from a checkout |
 | `action.yml`, `Dockerfile` | the GitHub Action and the image |
 | `examples/static-site/` | a working example, used by the tests |
+
+## Releasing
+
+npm publishing runs from GitHub: `.github/workflows/publish.yml` publishes when a release is published, through npm
+trusted publishing (no npm token in the repository; the package's trusted publisher on npmjs.com names this repository,
+`publish.yml` and the `npm` environment). Its `build` job checks, tests and packs without the right to publish; its
+`publish` job only uploads that tarball, and waits for the `npm` environment's reviewer to approve.
+
+1. Set the new version in `package.json` (`npm version <x.y.z> --no-git-tag-version` also updates the lockfile),
+   `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`, and give it a dated section in `CHANGELOG.md`.
+2. Commit and push to `main`, and wait for CI.
+3. `gh release create v<x.y.z> --title "tapcheck <x.y.z>" --notes-file <that changelog section>`. The tag is also the
+   Action's version (`ashishjain15491/tapcheck@v<x.y.z>`). The workflow checks the tag matches `package.json`, runs
+   the type check and the tests, and, once the publish is approved on the run's page, publishes
+   `@ashishjain15491/tapcheck`.

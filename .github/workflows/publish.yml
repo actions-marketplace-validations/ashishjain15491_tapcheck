@@ -1,0 +1,56 @@
+name: publish
+# Publishes to npm when a GitHub release is published, through npm trusted publishing: npm checks the publish job's
+# OIDC token against the package's trusted publisher (npmjs.com, package settings: this repository, publish.yml and
+# the npm environment), so no npm token is stored here, and each version gets provenance. The release tag must be
+# v<version in package.json>.
+#
+# Two jobs so that the repository's code (tests, dependency install scripts, the build) never runs with the right to
+# publish: build checks, tests and packs without id-token; publish only uploads that tarball, in the npm environment
+# (give it a required reviewer and allow only v* tags in the repository settings).
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: The tag matches the package version
+        run: |
+          want="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "::error::The release tag is $GITHUB_REF_NAME but package.json says $want"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm pack # prepack builds dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: '*.tgz'
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # npm 11.5.1 or newer, which trusted publishing needs
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+      - run: npm publish ./*.tgz # a tarball: no lifecycle scripts run here
