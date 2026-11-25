@@ -22,7 +22,7 @@ export function hits(out: string): { all: Reach[]; runs: number } {
 
 /** The coverage map as Markdown, and its counts. `reasons` are matched against "GET /path", "dialog <name>" and "table <headers>: <control>". */
 export function coverage(all: Reach[], runs: number, routes: Route[], reasons: Config['coverage']['reasons']) {
-    const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s+/g, ' ');
+    const cell = (s: string) => s.replace(/[\\|]/g, '\\$&').replace(/\s+/g, ' '); // a backslash first, so `a\|b` stays one cell
     const by = (ok: (what: string) => boolean) => [...new Set(all.filter((h) => ok(h.what)).map((h) => (h.step ? `${h.part}: ${h.step}` : h.part)))];
     const who = (w: string[]) => cell(w.slice(0, 2).join(', ') + (w.length > 2 ? ` (+${w.length - 2})` : ''));
     const kind = (prefix: string) => [...new Set(all.filter((h) => h.what.startsWith(prefix)).map((h) => h.what))].sort().map((what) => `| ${cell(what.slice(prefix.length))} | ${who(by((w) => w === what))} |`);

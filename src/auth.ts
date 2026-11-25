@@ -31,7 +31,7 @@ export function totp(secret: string, at = Date.now()): string {
 /** A field by CSS selector, else by name attribute, else by its label text. */
 async function field(page: Page, key: string) {
     if (/^[#.[]|[\s=>]/.test(key)) return page.locator(key).first();
-    const byName = page.locator(`[name="${key.replace(/"/g, '\\"')}"]`);
+    const byName = page.locator(`[name="${key.replace(/[\\"]/g, '\\$&')}"]`);
     return (await byName.count()) ? byName.first() : page.getByLabel(key, { exact: false }).first();
 }
 

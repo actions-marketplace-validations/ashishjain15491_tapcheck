@@ -18,7 +18,7 @@ export function matcher(path: string): RegExp {
         if (t.length > 1 && t.startsWith('/')) return '(?:/[^/]+)?'; // /{id?} and /:id?
         if (t.startsWith('<path:') || t.startsWith('*')) return '.+';
         if (t.length > 1) return '[^/]+'; // {id}, <int:pk>, <pk>, :id
-        return t === '(' ? '(?:' : t === ')' ? ')?' : t.replace(/[.+?^$|[\]\\]/, '\\$&');
+        return t === '(' ? '(?:' : t === ')' ? ')?' : t.replace(/[.+?^$|[\]\\]/g, '\\$&');
     });
     return new RegExp(`^${src}/?$`);
 }

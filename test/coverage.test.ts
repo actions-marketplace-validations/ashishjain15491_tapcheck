@@ -29,6 +29,9 @@ test('coverage: the hits of every run folder merged against the routes, with rea
     const bare = coverage(all, runs, [], []);
     assert.ok(bare.md.includes('## Reached') && bare.md.includes('| POST /orders | flow-order: place an order |') && !bare.md.includes('GAP'), bare.md);
     assert.ok(bare.md.includes('## Dialogs'));
+    // A backslash or pipe in a name stays inside its cell.
+    const odd = coverage([{ part: 'interact-public', what: 'dialog C:\\temp | x' }], 1, [], []);
+    assert.ok(odd.md.includes('| C:\\\\temp \\| x |'), odd.md);
     assert.deepEqual(hits(`${out}/nowhere`), { all: [], runs: 0 });
 });
 
