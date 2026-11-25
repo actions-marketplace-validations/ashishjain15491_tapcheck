@@ -5,14 +5,16 @@
 - **GitHub Marketplace.** The Action is named "tapcheck audit", since the Marketplace needs a name no GitHub account
   uses. It is still used as `ashishjain15491/tapcheck@<tag>`.
 - **Escaping fixes** (from CodeQL). A backslash in a coverage row no longer breaks its `COVERAGE.md` table cell, and a
-  `login.form` field name with a backslash or quote finds its field.
+  `login.form` field name with a backslash in it finds its field.
 
 ## 0.1.1 (2026-11-25)
 
 No change to what tapcheck checks or how it runs.
 
 - **README and logo.** A shorter README in the usual layout, with the tapcheck logo (light and dark), a report
-  screenshot and badges; the logo kit is in `assets/`. The Codex plugin and the Action use the brand colour.
+  screenshot and badges, and setup steps for each way to run it: writing `tapcheck.yml`, the Jev key, sign-in
+  variables, then the plugin, npm, the Action and Docker. The logo kit and the social preview are in `assets/`; the
+  Codex plugin and the Action use the brand colour.
 - **GitHub Marketplace.** The Action's description fits the Marketplace's 125 characters.
 - **Action.** It runs on the current `actions/setup-node` and `actions/upload-artifact` (v7).
 - **Releases from GitHub.** `.github/workflows/publish.yml` publishes to npm when a release is published, through npm
@@ -21,7 +23,8 @@ No change to what tapcheck checks or how it runs.
 
 ## 0.1.0 (2026-11-25)
 
-The first release: on npm as `@ashishjain15491/tapcheck` (the CLI is still `tapcheck`), and as the GitHub Action `ashishjain15491/tapcheck@v0.1.0`.
+The first release: on npm as `@ashishjain15491/tapcheck` (the CLI is still `tapcheck`), and as the GitHub Action
+`ashishjain15491/tapcheck@v0.1.0`.
 
 - **Core harness.** One `tapcheck.yml` describes the app: how to start, stop and reset it, its sides and how each
   signs in (`none`, `manual`, `form` with optional TOTP, `command`), screens, tasks and viewports. `$NAME` values come
@@ -68,9 +71,10 @@ The first release: on npm as `@ashishjain15491/tapcheck` (the CLI is still `tapc
   only pages it actually crawled count toward `crawl.max` (a long route list used to crowd the links out). The
   signed-out check follows redirects, so `/` → `/admin` → `/login` counts as refused. A CSRF token cookie
   (`XSRF-TOKEN`, `csrftoken`) may be readable by script. The CSRF probe goes to the sides that sign in (every side
-  when none does), and a side can have its own `csrf`. Flows get `t.note(name, detail, 'warn' | 'info')` and a `timeout` (default 3600 s), so a flow that hangs fails instead
-  of stalling the run. A step that returns `{ warn: '…' }` is recorded as a warning, and `t.mail` has `count()` and
-  `all()`, with each message's `id` and `headers` (for checks such as List-Unsubscribe on every email of a send).
+  when none does), and a side can have its own `csrf`. Flows get `t.note(name, detail, 'warn' | 'info')` and a
+  `timeout` (default 3600 s), so a flow that hangs fails instead of stalling the run. A step that returns
+  `{ warn: '…' }` is recorded as a warning, and `t.mail` has `count()` and `all()`, with each message's `id` and
+  `headers` (for checks such as List-Unsubscribe on every email of a send).
   `t.jev()` waits for the page to settle and looks again when the page reloads under it. The crawl takes a link to a
   file (a PDF download) for what it is, not a page that answered 0, and a signed-out side skips the routes the list
   marks `auth`. Stopping the app stops what `app.start` left running in the background too, and `app.stop` runs only
@@ -87,7 +91,8 @@ The first release: on npm as `@ashishjain15491/tapcheck` (the CLI is still `tapc
   answer's status and skips refused ones; Mailpit and stub calls give up after 30 s or at the timeout;
   `t.mail.all({ limit })`; a form POST with `_method` is reached as that method.
   `browser.args` passes extra switches to the run's Chromium (an app on localhost whose sandboxed preview frames load
-  its own files needs `--disable-features=LocalNetworkAccessChecks`). A side whose sign-in fails says so in the terminal, not only in the report.
+  its own files needs `--disable-features=LocalNetworkAccessChecks`). A side whose sign-in fails says so in the
+  terminal, not only in the report.
   Waiting for a page to settle is capped outside the page, so a page whose own timers never fire (one
   sandboxed by its CSP without `allow-scripts`, such as an email preview) can't hang the run.
   `t.page({ viewport: 'mobile' })` hands a flow a page at any of the config's viewports (the first one by default), so
