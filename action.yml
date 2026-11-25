@@ -3,7 +3,7 @@ description: 'End-to-end and UI audit of a running web app: crawl, API contract,
 author: ashishjain15491
 branding:
   icon: check-circle
-  color: blue
+  color: green
 
 # The job must make the app reachable first: either tapcheck.yml has an app.start the runner can run, or an earlier
 # step started it. Jev (the ux and usability suites) runs only when the caller passes the key:

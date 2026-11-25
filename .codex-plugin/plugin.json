@@ -19,6 +19,9 @@
         "category": "Coding",
         "capabilities": ["Interactive", "Read", "Write"],
         "websiteURL": "https://github.com/ashishjain15491/tapcheck",
+        "brandColor": "#10b981",
+        "composerIcon": "./assets/tapcheck-favicon.svg",
+        "logo": "./assets/tapcheck-icon-128.png",
         "defaultPrompt": [
             "Set up tapcheck for this app.",
             "Run tapcheck on what I changed.",
