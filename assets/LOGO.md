@@ -12,6 +12,8 @@ font.
 | `tapcheck-wordmark.svg`, `tapcheck-wordmark-dark.svg` | the name alone |
 | `*-mono.svg`, `*-reversed.svg` | one colour: dark ink, or white on a colour |
 | `tapcheck-favicon.svg`, `tapcheck-favicon.ico`, `tapcheck-icon-*.png` | small sizes; the favicon drops the window dots so it reads at 16 px |
+| `social-preview.png` | the repository's social preview (1280×640), set in the GitHub settings |
+| `report.png` | a report from the example site, for the README |
 
 | Colour | On light | On dark |
 |---|---|---|
