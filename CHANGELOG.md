@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 (2026-11-25)
+
+No change to what tapcheck checks or how it runs.
+
+- **GitHub Marketplace.** The Action is named "tapcheck audit", since the Marketplace needs a name no GitHub account
+  uses. It is still used as `ashishjain15491/tapcheck@<tag>`.
+
 ## 0.1.1 (2026-11-25)
 
 No change to what tapcheck checks or how it runs.
