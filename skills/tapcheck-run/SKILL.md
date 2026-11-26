@@ -146,7 +146,9 @@ Keep it short and in this order:
 3. **Warnings**, briefly. A warning from `interact` (a control that did nothing) or `audit` (several looks for one
    kind of control, mixed label case, a style outside the design tokens) is measured, and usually a design decision.
    A warning from `ux` or `usability` is Jev being unsure, or a score just under 7 (5.5 to 7): it is for a person to
-   look at with the screenshot, not a defect and not a pass. Say that.
+   look at with the screenshot, not a defect and not a pass. Say that. A control that did nothing is one warning per
+   run, listing the screens it is on. When `audit` ran on the side, the desktop `visual:` findings are under `audit`
+   only; `ux` asks them at the other viewports.
 4. Parts skipped or not run, and why (no key, `JEV=off`, budget reached, sign-in failed).
 5. The Jev spend line the run printed (`Jev: … calls, … $0.12 of the $1 budget`), if Jev ran.
 6. The path of `report.html`, for the user to open; `REPORT.md` next to it is the same in a form that pastes into a

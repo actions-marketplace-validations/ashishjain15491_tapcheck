@@ -177,12 +177,14 @@ export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = fal
     return ctx;
 }
 
-/** Console errors and uncaught page errors, collected from now on. */
-export function watch(page: Page) {
+/** Console errors and uncaught page errors, collected from now on. With `base` (the side's base URL), not those raised
+ * while the page is on another site: a click on "Continue with …" leaves for that site's own page, whose errors aren't the app's. */
+export function watch(page: Page, base?: string) {
     const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
+    const away = () => { const at = site(page.url()); return !!base && !!at && at !== site(base); };
+    page.on('pageerror', (e) => !away() && errors.push(e.message));
     // Not the page's own: a trace (RECORD=1) puts a script in every frame, and a sandboxed frame refuses it out loud.
-    page.on('console', (m) => m.type() === 'error' && !/Blocked script execution in .* sandboxed/.test(m.text()) && errors.push(m.text()));
+    page.on('console', (m) => m.type() === 'error' && !away() && !/Blocked script execution in .* sandboxed/.test(m.text()) && errors.push(m.text()));
     return errors;
 }
 
@@ -318,8 +320,8 @@ export async function facts(page: Page) {
         };
         // Tagged for a marked screenshot (MARK=1), as the other measured elements are.
         const broken = [...document.images].filter((i) => visible(i) && i.complete && i.naturalWidth === 0).map((i) => { i.setAttribute('data-tapcheck-mark-broken', 'does not load'); return i.currentSrc || i.src; });
-        const controls = [...document.querySelectorAll('a[href], button, [role=button], input:not([type=hidden]), select, textarea, summary')]
-            .filter(visible).slice(0, 250).map((el) => {
+        const els = [...document.querySelectorAll('a[href], button, [role=button], input:not([type=hidden]), select, textarea, summary')].filter(visible).slice(0, 250);
+        const controls = els.map((el) => {
                 const r = el.getBoundingClientRect();
                 const label = ((el as HTMLElement).innerText || el.getAttribute('aria-label') || el.getAttribute('title') || (el as HTMLInputElement).placeholder || '')
                     .replace(/\s+/g, ' ').trim().slice(0, 60);
@@ -338,10 +340,13 @@ export async function facts(page: Page) {
             }
         }
         // WCAG 2.2 target size (2.5.8): controls in the first screen smaller than 24 × 24 px, inline text links aside.
+        // Off-screen: past the viewport's left or right edge, unless in a rail that scrolls sideways (its chips are a swipe away).
+        const rail = (el: Element) => { for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) if (p.scrollWidth > p.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(p).overflowX)) return true; return false; };
+        const off = controls.filter((c, i) => (c.x < -1 || c.x + c.w > vw + 1) && !rail(els[i]));
         const small = controls.filter((c) => c.y < vh && (c.w < 24 || c.h < 24) && c.tag !== 'a').map((c) => `${c.tag} "${c.label}" ${c.w}×${c.h}`);
         return {
             title: document.title, lang: document.documentElement.lang, overflowX: document.documentElement.scrollWidth > vw + 1,
-            brokenImages: broken, offscreen: controls.filter((c) => c.x < -1 || c.x + c.w > vw + 1).length, controls,
+            brokenImages: broken, offscreen: off.length, offscreenLabels: off.slice(0, 5).map((c) => c.label || `<${c.tag}>`), controls,
             height: document.documentElement.scrollHeight, textCoverage: Math.round((ink / (vw * vh)) * 1000) / 1000, smallTargets: small,
             h1: document.querySelectorAll('h1').length,
         };

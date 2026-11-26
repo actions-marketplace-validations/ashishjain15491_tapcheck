@@ -81,7 +81,7 @@ export async function run(r: Run) {
                 r.record({ suite: S, where: `cookie ${c.name}`, check: 'session cookie flags', status: bad.length ? 'fail' : 'pass',
                     detail: bad.join(', ') || `${c.httpOnly ? 'HttpOnly' : 'readable by script (a CSRF token)'}, SameSite=${c.sameSite}${https ? ', Secure' : ''}` });
             }
-            if (!session.length) r.record({ suite: S, where: 'cookies', check: 'session cookie flags', status: 'warn', detail: 'no session-like cookie in the saved session' });
+            if (!session.length) r.record({ suite: S, where: 'cookies', check: 'session cookie flags', status: 'info', detail: 'no session cookie to check: the saved session has none (it may be kept in local storage)' });
 
             // Signed out: every page must refuse or send to sign in.
             const anon = await pwRequest.newContext();

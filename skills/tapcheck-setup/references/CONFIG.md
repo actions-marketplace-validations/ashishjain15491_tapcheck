@@ -171,7 +171,11 @@ for a throwaway database you reset with `app.reset`. Like `RESET=1`, it is ignor
 way, so point `interact` at test data.
 
 `audit` checks the configured screens on a desktop (light, then `prefers-color-scheme: dark`), a 768 px tablet and a
-375 px phone. `max` adds that many pages from the crawl (the crawl has to be in the same run: `ONLY=crawl,audit`);
+375 px phone. A screen has a dark mode when its page background or text colour, or a surface covering a quarter of the
+window, changes under `prefers-color-scheme: dark`; an app that takes its theme from an account setting shows no dark
+mode this way, so sign that side in with the account set to dark to audit it. Controls that overlap but that scrolling
+moves apart (a floating chat button over a long page, an arrow over the row it scrolls) are not a finding; the same
+button over a control on a page with no room to scroll is. Jev looks at an opened menu or dialog cut out of the screen. `max` adds that many pages from the crawl (the crawl has to be in the same run: `ONLY=crawl,audit`);
 `skip` is a regular expression of paths to leave out, for pages that are a canvas or an editor. It opens only the
 menus and dialogs the markup announces (`aria-haspopup`, `aria-expanded="false"`, `popovertarget`).
 
@@ -388,7 +392,7 @@ markers and notes are placed so they cover no other marker or note, and no other
 | `audit` | controls that overlap, text cut off, shortened text, targets under 24 px, the widest element behind sideways scroll, images without alt text |
 | `a11y` | the elements of each axe violation, with the rule's name |
 | `crawl` | form fields without a label, images that don't load |
-| `interact` | a control that did nothing, raised an error, set off a 5xx or opened a native dialog, when it is still on the screen |
+| `interact` | a control that did nothing (on the first screen it is dead on), raised an error, set off a 5xx or opened a native dialog, when it is still on the screen |
 | flows | whatever `t.mark` names |
 | what Jev judged (`ux`, `usability`, `audit`'s look, `t.jev`), a failed flow step | the banner alone, on the screenshot that was judged: Jev says what is wrong, not where |
 

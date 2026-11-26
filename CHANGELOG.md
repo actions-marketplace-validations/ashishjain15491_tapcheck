@@ -12,6 +12,22 @@ Fixes from reviewing a long run on a real app, for false alarms and for what the
 - **A menu or dialog is judged on its own.** `audit` gives Jev the opened menu or dialog cut out of the screen, so the
   page it covers on purpose no longer reads as clipped, overlapping or out of line.
 - **Near misses warn.** A Jev score from 5.5 to just under 7 is a warning; under 5.5 still fails.
+- **Jev's questions.** "Cut off" no longer counts a row that scrolls sideways, text shortened with "…", a decorative
+  picture or content past the bottom of the window or a panel; "out of line" counts edges and baselines, not columns
+  of different text lengths or cards of unequal height; an empty state that asks to pick or search counts as loaded;
+  the language heuristic judges terms against the screen's own users (`audience`, `context`).
+- **ux.** A screen with clearly no main call to action records `design: cta`, `cta label` and the attention check as
+  info. Its own target-size check is gone (`audit`'s has the WCAG spacing exception), it leaves the desktop `visual:`
+  questions to `audit` when audit looked at that screen, and "controls on screen" names them and leaves out chips in a
+  row that scrolls sideways.
+- **audit.** Controls that scrolling moves apart (a floating chat button over a long page) no longer overlap; dark mode
+  is told by the page's own colours and its large surfaces, so live data changing between two loads isn't a theme.
+- **interact.** A selected tab, segment or the current page isn't a control that does nothing; a dead control is
+  reported once per run with the screens it is on; console errors on another site's page (a sign-in provider) aren't
+  the app's.
+- **usability** never offers a control something covers, moves the pointer away after each step so a hover menu
+  closes, and names the control a failed click was on.
+- **security.** A side whose session isn't in a cookie gets an info, not a cookie-flag warning.
 - **The saved session keeps only the sign-in.** Saving the session as each part ends keeps the cookies and the sign-in
   entries of local storage; the rest stays as it was at sign-in, so a filter or tab `interact` changed isn't carried
   into the next part or run.

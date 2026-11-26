@@ -30,22 +30,33 @@ const FORM = `<!doctype html><html lang="en"><title>t</title><body><h1>t</h1>
 <input name="email" type="email" aria-label="Email"><p id="err" role="alert" hidden>Enter an email address.</p><button>Save</button></form></dialog>
 </body></html>`;
 
+// Segments and tabs with one already selected, a control that leaves for another site, and two that really do nothing.
+const SEG = `<!doctype html><html lang="en"><title>t</title><body><h1>t</h1><p id="view">List</p>
+<button onclick="location.href = 'http://localhost:' + location.port + '/away'">Continue elsewhere</button>
+<div role="tablist"><button role="tab" aria-selected="true">All 46</button></div>
+<nav><button aria-current="page">1</button></nav>
+<div><button onclick="if (view.textContent !== 'List') view.textContent = 'List'">List</button><button onclick="if (view.textContent !== 'Calendar') view.textContent = 'Calendar'">Calendar</button></div>
+<div><button onclick="view.append('.')">Refresh</button><button>Export</button></div>
+<p><button>Closed</button></p>
+</body></html>`;
+
 const tmp = mkdtempSync(`${tmpdir()}/tapcheck-interact-`);
 const asked: string[] = [];
 const server = createServer((req, res) => {
     asked.push(`${req.method} ${req.url}`);
-    res.writeHead(200, { 'content-type': 'text/html' }).end(req.url === '/' ? HOME : req.url === '/form' ? FORM : 'ok');
+    res.writeHead(200, { 'content-type': 'text/html' }).end(req.url === '/' ? HOME : req.url === '/form' ? FORM : req.url?.startsWith('/seg') ? SEG
+        : req.url === '/away' ? '<!doctype html><title>away</title><script>console.error("theirs")</script>' : 'ok');
 });
 await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
 after(async () => { await closeBrowser(); server.close(); });
 
 /** Runs the suite on one page; returns a lookup of [status, detail] by place and check. */
-async function sweep(path: string, extra: object = {}) {
+async function sweep(path: string | string[], extra: object = {}) {
     asked.length = 0;
     const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }], ...extra }, tmp);
     const found: Omit<Finding, 'side'>[] = [];
     const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); },
-        crawl: { pages: [{ path, status: 200, finalPath: path, ms: 0, errors: [], links: [] }], hits: [], done: true } };
+        crawl: { pages: [path].flat().map((p) => ({ path: p, status: 200, finalPath: p, ms: 0, errors: [], links: [] })), hits: [], done: true } };
     await interact.run(r);
     return (where: string, check: string) => { const f = found.find((x) => x.where === where && x.check === check); return [f?.status, f?.detail ?? '']; };
 }
@@ -83,4 +94,15 @@ test('interact.submit: a form that POSTs is sent only when it is on', async () =
     assert.match(on('/form › New plant', 'invalid input shows an error').join(), /^pass,message: Enter an email address\./);
     assert.deepEqual(on('/form › New plant', 'valid input is accepted'), ['pass', 'submitted']);
     assert.equal(asked.filter((a) => a === 'POST /hit/post').length, 1, 'the valid input was posted once, the invalid input never');
+});
+
+test('interact: the selected segment, tab and page are not dead, another site\'s console errors are not the app\'s, and a dead label is reported once', async () => {
+    const at = await sweep(['/seg', '/seg2']);
+    // "All 46" and "1" say they are selected; "List" only looks it, and does something once "Calendar" was clicked. "Export" never does.
+    assert.deepEqual(at('/seg', 'every control does something'), ['warn', 'nothing changed after: "Export" (also on /seg2), "Closed" (also on /seg2)']);
+    assert.deepEqual(at('/seg2', 'every control does something'), ['pass', '"Export" is reported on /seg, "Closed" is reported on /seg']);
+    // The click left for localhost, another site than 127.0.0.1, and that page's console.error is its own.
+    assert.ok(asked.includes('GET /away'));
+    assert.equal(at('/seg', 'clicks raise no page or console errors')[0], 'pass');
+    assert.deepEqual(JSON.parse(readFileSync(`${tmp}/interact.json`, 'utf8')).screens[1].dead, ['Export', 'Closed']);
 });

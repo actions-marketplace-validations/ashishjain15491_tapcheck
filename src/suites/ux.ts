@@ -1,8 +1,9 @@
 /*
  * Deep UI/UX audit, per screen and viewport:
- * - visual QA (loaded, errors, overlap, clipping, alignment) and measured facts (status, sideways scroll, broken images,
- *   off-screen and under-24px controls, a single h1, JS errors);
- * - visual design: CTA clarity and label, negative space (Jev's judgment plus measured text coverage), density, hierarchy,
+ * - visual QA (loaded, errors, overlap, clipping, alignment; left to the audit suite for a desktop screen it already
+ *   asked about in this run) and measured facts (status, sideways scroll, broken images, off-screen controls, a single
+ *   h1, JS errors; target size is the audit suite's, which knows the spacing exception);
+ * - visual design: CTA clarity and label (not judged on a screen Jev says has no main call to action), negative space (Jev's judgment plus measured text coverage), density, hierarchy,
  *   legibility, spacing rhythm;
  * - heuristic evaluation: the usability heuristics a screenshot can show;
  * - guerrilla five-second test on the first screen: does a passer-by get the screen's job, and pick it among the others;
@@ -17,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import type { Screen } from '../config.ts';
 import { abs, context, facts, open, resolve, SessionExpired, slices, slug, watch, type Run } from '../browser.ts';
-import { ask, bad, BudgetReached, good, img, MIN_SCORE, scoreStatus, status, to10 } from '../jev.ts';
+import { ask, bad, BudgetReached, good, img, looked, MIN_SCORE, NO, scoreStatus, status, to10 } from '../jev.ts';
 import { ATTENTION, ATTENTION_CHECK, ATTENTION_MODEL, DESIGN, guerrilla, HEURISTICS, purposeKey, VISUAL } from '../questions.ts';
 
 const S = 'ux';
@@ -104,8 +105,7 @@ export async function run(r: Run) {
                     r.record({ suite: S, where, check: 'HTTP status', status: http && http < 400 ? 'pass' : 'fail', detail: `${http} ${abs(r, path)}` });
                     r.record({ suite: S, where, check: 'no sideways scroll', status: f.overflowX ? 'fail' : 'pass' });
                     r.record({ suite: S, where, check: 'images load', status: f.brokenImages.length ? 'fail' : 'pass', detail: f.brokenImages.slice(0, 5).join(', ') || undefined });
-                    r.record({ suite: S, where, check: 'controls on screen', status: f.offscreen ? 'fail' : 'pass', detail: f.offscreen ? `${f.offscreen} off-screen` : undefined });
-                    r.record({ suite: S, where, check: 'target size ≥ 24px', status: f.smallTargets.length ? 'warn' : 'pass', detail: f.smallTargets.slice(0, 6).join('; ') || undefined });
+                    r.record({ suite: S, where, check: 'controls on screen', status: f.offscreen ? 'fail' : 'pass', detail: f.offscreen ? `${f.offscreen} off-screen: ${f.offscreenLabels.join(', ')}` : undefined });
                     r.record({ suite: S, where, check: 'one h1', status: f.h1 === 1 ? 'pass' : 'warn', detail: `${f.h1} h1 element(s)` });
                     r.record({ suite: S, where, check: 'no JS errors', status: errors.length ? 'fail' : 'pass', detail: errors.slice(0, 3).join(' | ') || undefined });
                     r.record({ suite: S, where, check: 'negative space (measured)', status: f.textCoverage > MAX_TEXT_COVERAGE ? 'warn' : 'pass',
@@ -123,12 +123,19 @@ export async function run(r: Run) {
                     const raw = [...new Set(texts.filter((t) => known.has(t) || /(^|\s):[a-z_]{2,}\b/.test(t)))];
                     r.record({ suite: S, where, check: 'no raw translation keys (measured)', status: raw.length ? 'fail' : 'pass', detail: raw.slice(0, 6).join(', ') || undefined, evidence: raw.length ? [shots[0]] : undefined });
 
-                    // One request for every judgment over the same screenshots.
+                    // One request for every judgment over the same screenshots. The VISUAL questions are left out when the
+                    // audit suite asked them of this screen at this viewport earlier in the run.
+                    const audited = vp === r.cfg.viewports.find((v) => !v.mobile) && looked.has(`${r.dir} ${s.name}`);
                     const a = await ask(key, { screen: s.name, viewport: `${vp.name}, ${vp.width} × ${vp.height} px`, screenshots: shots.map(img),
                         note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined },
-                    { ...VISUAL, ...DESIGN, ...HEURISTICS(r.cfg.audience, r.cfg.context) }, shots);
+                    { ...(audited ? {} : VISUAL), ...DESIGN, ...HEURISTICS(r.cfg.audience, r.cfg.context), ...ATTENTION_CHECK }, shots);
                     visual(r, S, where, a, shots);
-                    for (const k of ['cta', 'cta_label', 'negative_space', 'hierarchy', 'legibility', 'spacing'] as const) scored(r, where, `design: ${k.replace('_', ' ')}`, a[k], shots);
+                    // A screen Jev is clear has no main call to action isn't judged on one: the best it could score is a filter chip.
+                    const noCta = a.has_cta.noul < NO ? `no main call to action on this screen (p=${a.has_cta.noul.toFixed(2)})` : '';
+                    for (const k of ['cta', 'cta_label', 'negative_space', 'hierarchy', 'legibility', 'spacing'] as const) {
+                        if (noCta && k.startsWith('cta')) r.record({ suite: S, where, check: `design: ${k.replace('_', ' ')}`, status: 'info', detail: noCta });
+                        else scored(r, where, `design: ${k.replace('_', ' ')}`, a[k], shots);
+                    }
                     const probs = Object.entries(a.density.probabilities ?? {}).map(([k, p]) => `${k} ${(p as number).toFixed(2)}`).join(', ');
                     r.record({ suite: S, where, check: 'design: density', status: a.density.choice === 'balanced' ? 'pass' : 'warn', detail: `${a.density.choice} (${probs})`, evidence: [shots[0]] });
                     for (const k of ['h1_status', 'h2_language', 'h4_consistency', 'h6_recognition', 'h8_minimalist'] as const) scored(r, where, `heuristic: ${k}`, a[k], shots);
@@ -164,8 +171,8 @@ export async function run(r: Run) {
                         const map = `${r.dir}/shots/${key}-heatmap.png`;
                         await heatmap(page, shots[0], looks, map);
                         const seen = hasCta === 'pass' && looks.slice(0, 3).some((l) => same(l.box, at.main_cta.box));
-                        r.record({ suite: S, where, check: 'attention: main CTA among first three looks', status: hasCta !== 'pass' ? 'warn' : seen ? 'pass' : 'fail',
-                            detail: hasCta !== 'pass' ? `no clear main CTA on the first screen (p=${c.has_cta.noul.toFixed(2)})` : seen ? undefined : 'the eye is predicted to land elsewhere first',
+                        r.record({ suite: S, where, check: 'attention: main CTA among first three looks', status: noCta ? 'info' : hasCta !== 'pass' ? 'warn' : seen ? 'pass' : 'fail',
+                            detail: noCta || (hasCta !== 'pass' ? `no clear main CTA on the first screen (p=${c.has_cta.noul.toFixed(2)})` : seen ? undefined : 'the eye is predicted to land elsewhere first'),
                             evidence: [map] });
                     }
                 } catch (e) {

@@ -9,8 +9,8 @@ import type { Task } from './config.ts';
 // ───────────────────────────── VISUAL QA (functional verification of the rendered screen) ─────────────────────────────
 export const VISUAL = {
     loaded: noul("Do `screenshots` show the screen's main content, fully loaded?", {
-        true: "The screen's own content is visible: the text, data or controls it exists to show.",
-        false: 'The screen is blank, still shows a loading spinner or grey placeholder blocks, or shows only a header and menu.',
+        true: "The screen's own content is visible: the text, data or controls it exists to show. An empty state that asks the person to pick, search for or add something, often beside a grey illustration, counts as loaded.",
+        false: 'The screen is blank, still shows a loading spinner or grey placeholder blocks where content is about to appear, or shows only a header and menu.',
     }),
     error_shown: noul('Do `screenshots` show an error message?', {
         true: "A message says something went wrong, a request failed, a page wasn't found, or the server had an error.",
@@ -21,16 +21,16 @@ export const VISUAL = {
         false: 'Every piece of text and every control has its own space. A menu or dialog shown on purpose above the page is not overlap.',
     }),
     clipped: noul('In `screenshots`, is any text or control cut off?', {
-        true: "A word, label, button or field is cut off by the side of the screen or by its own box, so part of it can't be seen.",
-        false: 'All text and controls are fully visible. Content running past the bottom of one slice into the next is not cut off.',
+        true: "A word, label, button or field is cut off by the side of the screen or by its own box, with no \"…\" and nothing to scroll, so part of it can't be seen.",
+        false: 'All text and controls are fully visible. None of these is cut off: an item partly shown at the edge of a row, table or list that scrolls inside its panel (a sideways rail of chips, a carousel); text deliberately shortened with "…"; a decorative picture running off its frame; content running past the bottom edge of the window, of a scrolling panel, or of one slice into the next.',
     }),
     raw_key: noul('Do `screenshots` show a raw translation key or placeholder instead of words, such as "settings.profile.title", "validation.required" or ":count items"?', {
         true: 'Some label, button or message shows a dotted code-like key or an unfilled :placeholder instead of normal words.',
         false: 'Every label and message reads as normal words. Web addresses, email addresses and file names are not keys.',
     }),
     misaligned: noul('In `screenshots`, are items that belong in one row or column visibly out of line?', {
-        true: 'Cards, fields, labels or buttons meant to line up start or end at slightly different places, or sit at different heights.',
-        false: 'Items in each row and column line up along their edges or centres.',
+        true: 'An edge or baseline that should match its neighbours is visibly off: cards, fields, labels or buttons meant to line up start or end at slightly different places, or sit at different heights.',
+        false: 'Items in each row and column line up along their edges, centres or baselines. Table columns whose cells hold text of different lengths, and cards of unequal height, are in line when their edges or baselines match.',
     }),
 };
 
@@ -110,7 +110,8 @@ export const DESIGN = {
 
 // ───────────────────────────── HEURISTIC EVALUATION (the usability heuristics a screenshot can show) ─────────────────────────────
 // Error recovery, undo and shortcuts for experts need interaction, so the usability suite covers them, not these.
-// `audience` is tapcheck.yml's audience: who the app is for, so plain wording is judged for that reader.
+// `audience` is tapcheck.yml's audience: who the app is for. Every level of the wording question is about that reader,
+// so the terms they know don't count against a screen and the ones they don't still do.
 export const HEURISTICS = (audience: string, context?: string) => ({
     h1_status: score('How well do `screenshots` show where the person is and the state of things (current page, saved or not, loading, counts)?', [
         'Nothing tells the person where they are or what state things are in.',
@@ -120,11 +121,11 @@ export const HEURISTICS = (audience: string, context?: string) => ({
         'The current page, item states and any progress are all plain to see.',
     ]),
     h2_language: score(`How well does the wording in \`screenshots\` use everyday words ${audience} would use?${context ? ' The terms of their field that `product` names count as their own words.' : ''}`, [
-        'Much of the wording is technical jargon, codes or internal names.',
-        'Several labels use jargon or words that reader would not use.',
-        'Mostly plain, with a few technical terms left unexplained.',
-        'Plain everyday wording, with one or two technical terms.',
-        'Every label and message reads as a person would say it.',
+        "Much of the wording is codes, internal names or terms this screen's users would not know.",
+        'Several labels use terms its users would not know or would not use.',
+        'Mostly words its users use, with a few terms they would not know left unexplained.',
+        'Words its users use throughout, with one or two terms they might not know.',
+        'Every label and message reads as its users would say it.',
     ]),
     h4_consistency: score('How consistent do buttons, links, icons and headings look across `screenshots`?', [
         'Things that do the same job look different everywhere.',
@@ -173,6 +174,8 @@ export const purposeKey = (p: string) => p.toLowerCase().replace(/[^a-z]+/g, '_'
 
 // ───────────────────────────── ATTENTION (predicted eye tracking; Box questions on jev-preview) ─────────────────────────────
 // These predict where people look; they are not eye-tracking data. Each is answered on its own, so each names its rank.
+// has_cta is asked of the first screen before its box is used, and of the whole screen with the design questions: a
+// screen with no main call to action isn't scored on one.
 export const ATTENTION_MODEL = 'jev-preview';
 export const ATTENTION = {
     look_1: box('The single element on this screen that a first-time visitor looks at first.'),
@@ -181,9 +184,9 @@ export const ATTENTION = {
     main_cta: box('The main button or link a person would click to do what this screen is for.'),
 };
 export const ATTENTION_CHECK = {
-    has_cta: noul("Is there a button or link in `screenshot` that does the main job of this screen?", {
+    has_cta: noul('Does this screen show a button or link that does its main job?', {
         true: 'A visible button or link starts the screen\'s main task, such as "Get started" or "Sign up".',
-        false: 'No such button or link is visible; the screen only shows information or navigation.',
+        false: 'No such button or link is visible; the screen only shows information, filters or navigation.',
     }),
 };
 

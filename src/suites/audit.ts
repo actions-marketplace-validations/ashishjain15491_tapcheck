@@ -1,12 +1,13 @@
 /*
  * Full UI audit, per screen (the configured screens, plus up to audit.max crawled pages; paths matching audit.skip are
  * left out). Measured by code; Jev only adds its look.
- * - desktop, light: text cut off or shortened with no way to read it, controls that overlap, targets under 24 px, leaked
- *   placeholders, heading levels, images without alt text, the focus ring on each Tab stop; every menu and dialog the
- *   screen's markup says it opens (aria-haspopup, aria-expanded, popovertarget) is opened and measured the same way,
- *   plus whether it fits on the screen;
+ * - desktop, light: text cut off or shortened with no way to read it, controls that overlap (and can't be scrolled
+ *   apart, as a floating button and the page under it can), targets under 24 px, leaked placeholders, heading levels,
+ *   images without alt text, the focus ring on each Tab stop; every menu and dialog the screen's markup says it opens
+ *   (aria-haspopup, aria-expanded, popovertarget) is opened and measured the same way, plus whether it fits on the screen;
  * - desktop, dark (prefers-color-scheme: dark): axe's colour-contrast rule, which also catches text that became
- *   invisible, and backgrounds that stayed white. A page that doesn't react to the colour scheme is one info finding;
+ *   invisible, and backgrounds that stayed white. A page whose own colours and large surfaces don't react to the colour
+ *   scheme is one info finding;
  * - tablet (768 px) and phone (375 px): sideways scroll, cut-off text, overlap, small targets;
  * - across the screens: buttons and fields of one kind that come in several sizes, radii or colours, labels in Title
  *   Case next to labels in sentence case, and, with `design:` in tapcheck.yml, computed colours, fonts, radii and
@@ -20,7 +21,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import type { Config } from '../config.ts';
 import { context, hashRoute, marked, open, resolve, SessionExpired, slices, slug, type Run, type Viewport } from '../browser.ts';
-import { ask, BudgetReached, img, whyOff } from '../jev.ts';
+import { ask, BudgetReached, img, looked, whyOff } from '../jev.ts';
 import { VISUAL } from '../questions.ts';
 import { AXE } from './a11y.ts';
 import { UNSAFE } from './usability.ts';
@@ -110,10 +111,36 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
     };
     const controls = all.filter((e) => e.matches('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=tab], [role=switch]')).slice(0, 300)
         .map((el) => ({ el, box: seen(el) })).filter((c) => c.box.width > 1 && c.box.height > 1);
+    type Box = ReturnType<typeof seen>;
+    const over = (a: Box, b: Box) => {
+        const w = Math.min(a.right, b.right) - Math.max(a.left, b.left), h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        return w > 4 && h > 4 && w * h > 0.25 * Math.min(a.width * a.height, b.width * b.height);
+    };
+    const inView = (el: Element) => { const s = seen(el); return Math.max(0, Math.min(s.right, vw) - Math.max(s.left, 0)) * Math.max(0, Math.min(s.bottom, vh) - Math.max(s.top, 0)); };
+    // Whether a person can scroll `m` clear of `o`: a floating button over a long page, an arrow over the row it scrolls.
+    // Each thing around `m` that scrolls (the page last) is scrolled for real, just far enough each way, and put back.
+    // Clear means the two no longer overlap and `m` is no less in view; when both move together, or there is no room
+    // left to scroll (a short page), they still overlap.
+    const scrollsClear = (m: Element, o: Element) => {
+        const doc = document.scrollingElement, a = m.getBoundingClientRect(), b = o.getBoundingClientRect(), before = inView(m);
+        const scrolls = (el: Element, axis: 'overflowX' | 'overflowY') => (el === doc ? [document.documentElement, document.body].every((e) => !/hidden|clip/.test(getComputedStyle(e)[axis])) : /auto|scroll/.test(getComputedStyle(el)[axis]));
+        for (let p = m.parentElement; p; p = p.parentElement) {
+            const sc = p === document.documentElement ? doc : p === document.body ? null : p;
+            if (!sc) continue;
+            for (const [dx, dy] of [[0, a.bottom - b.top], [0, a.top - b.bottom], [a.right - b.left, 0], [a.left - b.right, 0]]) {
+                if (!scrolls(sc, dx ? 'overflowX' : 'overflowY')) continue;
+                const x = sc.scrollLeft, y = sc.scrollTop;
+                sc.scrollTo({ left: x + dx, top: y + dy, behavior: 'instant' });
+                const clear = (sc.scrollLeft !== x || sc.scrollTop !== y) && !over(seen(m), seen(o)) && inView(m) >= before - 1;
+                sc.scrollTo({ left: x, top: y, behavior: 'instant' });
+                if (clear) return true;
+            }
+        }
+        return false;
+    };
     for (const [i, a] of controls.entries()) for (const b of controls.slice(i + 1)) {
         if (a.el.contains(b.el) || b.el.contains(a.el) || (a.el.closest('label') && a.el.closest('label') === b.el.closest('label'))) continue;
-        const w = Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left), h = Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top);
-        if (w > 4 && h > 4 && w * h > 0.25 * Math.min(a.box.width * a.box.height, b.box.width * b.box.height)) { overlap.add(`${name(a.el)} ↔ ${name(b.el)}`); for (const c of [a, b]) mark(c.el, 'overlap', `${name(a.el)} ↔ ${name(b.el)}`); }
+        if (over(a.box, b.box) && !scrollsClear(a.el, b.el) && !scrollsClear(b.el, a.el)) { overlap.add(`${name(a.el)} ↔ ${name(b.el)}`); for (const c of [a, b]) mark(c.el, 'overlap', `${name(a.el)} ↔ ${name(b.el)}`); }
     }
     // WCAG 2.2 target size (2.5.8): under 24 px fails unless a 24 px area centred on it touches no other target. Links in a sentence are exempt.
     for (const { el } of controls) {
@@ -267,7 +294,13 @@ export async function run(r: Run) {
     async function onDesktop(page: Page, t: (typeof out.screens)[number]) {
         const where = `${t.name} · desktop`, key = `audit-${slug(t.name)}`;
         await open(r, page, t.path);
-        const colours = () => page.evaluate(() => [document.documentElement, ...document.querySelectorAll('body, body *')].slice(0, 400).map((el) => { const s = getComputedStyle(el); return s.backgroundColor + s.color; }).join());
+        // What a theme changes: the page's own background and text colour, and the background of every surface a quarter
+        // of the window or more. Smaller things (a price that turned red, a row that came in) change between two loads anyway.
+        const colours = () => page.evaluate(() => {
+            const root = [document.documentElement, document.body].map((el) => { const s = getComputedStyle(el); return s.backgroundColor + s.color; });
+            const big = [...document.querySelectorAll('body *')].filter((el) => { const b = el.getBoundingClientRect(); return Math.max(0, Math.min(b.right, innerWidth) - Math.max(b.left, 0)) * Math.max(0, Math.min(b.bottom, innerHeight) - Math.max(b.top, 0)) >= innerWidth * innerHeight / 4; });
+            return [...root, ...[...new Set(big.map((el) => getComputedStyle(el).backgroundColor))].sort()].join();
+        });
         const light = await colours();
         const m = await page.evaluate(measure, { extras: true, design: r.cfg.design });
         for (const it of m.items) {
@@ -286,6 +319,7 @@ export async function run(r: Run) {
         await emit(page, t, 'desktop', where, { ...m.problems, 'focus ring on every Tab stop': await noFocusRing(page) }, shots);
         if (shots) {
             await look(where, key, { screen: t.name, viewport: `desktop, ${desktop.width} × ${desktop.height} px`, note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined }, VISUAL, shots);
+            if (!jevOff) looked.add(`${r.dir} ${t.name}`); // answered, not stopped by the budget
         }
 
         // Menus and dialogs: opened one at a time, measured, closed with Escape.

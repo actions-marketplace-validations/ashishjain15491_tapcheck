@@ -47,6 +47,8 @@ let opts: Config['jev'] & { context?: string } = { budget: 1, headers: {} };
 let client: Client | null = null;
 let tokens = 0, calls = 0, cached = 0, ms = 0;
 export const payloads: unknown[] = [];
+/** "<run dir> <screen>": the screens audit asked the VISUAL questions of at the desktop viewport, so ux needn't ask again. */
+export const looked = new Set<string>();
 const memo = new Map<string, any>();
 
 /** Starts a run: its budget and headers, counters and memo cleared. A self-check passes a fake client; nothing then reaches the network. */

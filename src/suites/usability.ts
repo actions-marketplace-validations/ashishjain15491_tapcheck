@@ -34,7 +34,7 @@ const place = (c: { x: number; y: number }) => (c.y < 72 ? 'at the top of the sc
 async function options(r: Run, page: Page, vh: number, text: string | undefined, tried: Set<string>) {
     const visible = [];
     for (const h of await page.$$('a[href], button, [role=button], input:not([type=hidden]), select, textarea, summary')) if (await h.isVisible()) visible.push(h);
-    type C = { tag: string; label: string; x: number; y: number; w: number; h: number; submit: boolean; hidden: boolean; field: boolean; reads: boolean; path: string; typing?: boolean };
+    type C = { tag: string; label: string; x: number; y: number; w: number; h: number; submit: boolean; hidden: boolean; covered: boolean; field: boolean; reads: boolean; path: string; typing?: boolean };
     const controls: C[] = await Promise.all(visible.map((h) => h.evaluate((el) => {
         const r = el.getBoundingClientRect();
         const label = ((el as HTMLElement).innerText || el.getAttribute('aria-label') || el.getAttribute('title') || (el as HTMLInputElement).placeholder || '').replace(/\s+/g, ' ').trim().slice(0, 60);
@@ -42,13 +42,15 @@ async function options(r: Run, page: Page, vh: number, text: string | undefined,
         // A form's submit button (an untyped button of a form submits too) would save something, so it is never offered.
         const submit = el.matches('button[type=submit], input[type=submit], input[type=image]') || (el.matches('button:not([type])') && !!form);
         const field = el.matches('textarea, input:not([type]), input[type=text], input[type=search], input[type=email]');
-        return { tag: el.tagName.toLowerCase(), label, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), submit, hidden: !!el.closest('[aria-hidden=true]'), field, reads: !form || form.method === 'get',
+        // Something else is on top at its centre (an open flyout, a sticky bar): a click there would never land.
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { tag: el.tagName.toLowerCase(), label, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), submit, hidden: !!el.closest('[aria-hidden=true]'), covered: !!top && !el.contains(top), field, reads: !form || form.method === 'get',
             path: el instanceof HTMLAnchorElement ? el.pathname : '' };
     })));
     const opts: Record<string, string> = {};
     const at: Record<string, { i: number; c: C }> = {};
     for (const [i, c] of controls.entries()) {
-        if (!c.label || c.hidden || c.submit || c.y < 0 || c.y > vh || UNSAFE.test(c.label) || (c.path && r.cfg.crawl.skip.test(c.path))) continue;
+        if (!c.label || c.hidden || c.covered || c.submit || c.y < 0 || c.y > vh || UNSAFE.test(c.label) || (c.path && r.cfg.crawl.skip.test(c.path))) continue;
         // Enter in a field submits its form, so text is typed only outside a form or in one that reads (GET, as a search does).
         if (c.field && (!text || !c.reads)) continue;
         const k = slug(`${c.field ? 'type into ' : ''}${c.label} ${place(c)}`);
@@ -117,12 +119,21 @@ async function attempt(r: Run, page: Page, t: Task, vh: number) {
         const t0 = Date.now();
         try {
             if (pick.c.typing) { await visible[pick.i].fill(t.text!, { timeout: 5000 }); await visible[pick.i].press('Enter'); } // a search shows suggestions or submits
-            else await visible[pick.i].click({ timeout: 5000 });
-        } catch (e) { page.off('response', onResponse); note = `${pick.c.typing ? 'typing' : 'click'} failed: ${(e as Error).message.slice(0, 80)}`; break; }
+            else {
+                // As a person does: the pointer arrives first, and a rail that widens under it has moved the control before the click.
+                await visible[pick.i].hover({ timeout: 5000 });
+                await page.waitForTimeout(250);
+                await visible[pick.i].click({ timeout: 5000 });
+            }
+        } catch (e) { page.off('response', onResponse); note = `${pick.c.typing ? 'typing' : 'click'} failed on "${pick.c.label}": ${(e as Error).message.split('\n')[0].slice(0, 80)}`; break; }
         await settle(page);
         page.off('response', onResponse);
         const after = await page.evaluate(() => document.body.innerHTML.length);
         const to = page.url();
+        // The pointer leaves, so a menu that opens on hover closes instead of covering the next screen.
+        // ponytail: the top right corner, where few apps open anything on hover; pick a point over no control if one does.
+        await page.mouse.move(page.viewportSize()!.width - 1, 0);
+        await page.waitForTimeout(300);
         const c = pick.c;
         const dead = to === from && Math.abs(after - before) < 20 && !requests.length;
         if (dead || c.typing) tried.add(`${from}|${a.pick.choice}`);

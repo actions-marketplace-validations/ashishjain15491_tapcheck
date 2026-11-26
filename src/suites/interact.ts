@@ -3,7 +3,9 @@
  * desktop-sized viewport:
  * - clicks every safe visible control (buttons, tabs, disclosures, in-app links) and checks that nothing breaks: no page
  *   or console error, no 5xx from the app, no native alert/confirm/prompt, and that the click did something (the DOM or
- *   the address changed, a request went out, something opened); a control that does nothing is a warning;
+ *   the address changed, a request went out, something opened); a control that does nothing is a warning, reported once
+ *   per run with the screens it is on. The one already selected (aria-selected, aria-pressed, aria-checked, aria-current,
+ *   or the segment that does something once a neighbour was clicked) has nothing to do and is not counted;
  * - every dialog a click opens (dialog[open], role=dialog, role=alertdialog): it has an accessible name, focus moves into
  *   it, Escape closes it, and one that deletes is an alertdialog. A form inside is given invalid input (required fields
  *   emptied, a malformed address in email fields, text past maxlength) and must show an error state: aria-invalid, a
@@ -34,13 +36,14 @@ const DIALOG = 'dialog[open], [role=dialog], [role=alertdialog]';
 const DESTRUCTIVE = /\b(delete|remove|destroy|discard|erase|revoke)/i;
 const FIELDS = 'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=file]):not([type=submit]):not([type=button]):not([readonly]):not([disabled]), textarea:not([readonly]):not([disabled])';
 
-type Control = { i: number; label: string; href: string };
+type Control = { i: number; label: string; href: string; group: number };
 type Status = Finding['status'];
 
 /** Marks each safe, visible control with data-tapcheck and returns them. Of a table's rows only the first one's controls count. */
 const tag = (page: Page, own: string, skip: RegExp): Promise<Control[]> => page.evaluate(({ own, unsafe, skip, DIALOG }) => {
     const no = new RegExp(unsafe, 'i'), skipped = new RegExp(skip, 'i');
-    const out: { i: number; label: string; href: string }[] = [];
+    const out: { i: number; label: string; href: string; group: number }[] = [];
+    const groups: (Element | null)[] = []; // controls side by side (the same parent, or list items of one list) are a group
     [...document.querySelectorAll('a[href], button, input[type=button], input[type=submit], [role=button], [role=tab], summary')].forEach((el, i) => {
         el.removeAttribute('data-tapcheck');
         const r = el.getBoundingClientRect(), b = el as HTMLButtonElement;
@@ -53,7 +56,8 @@ const tag = (page: Page, own: string, skip: RegExp): Promise<Control[]> => page.
         const a = el instanceof HTMLAnchorElement ? el : null;
         if (a && (a.host !== own || skipped.test(a.pathname) || a.hasAttribute('download'))) return;
         el.setAttribute('data-tapcheck', String(i));
-        out.push({ i, label, href: a ? a.pathname + a.search + a.hash : '' });
+        const parent = (el.closest('li') ?? el).parentElement;
+        out.push({ i, label, href: a ? a.pathname + a.search + a.hash : '', group: groups.includes(parent) ? groups.indexOf(parent) : groups.push(parent) - 1 });
     });
     return out;
 }, { own, unsafe: UNSAFE.source, skip: skip.source, DIALOG });
@@ -156,7 +160,7 @@ export async function run(r: Run) {
     const page = await ctx.newPage();
 
     // What a click set off, collected until drain() files it under the control's label.
-    const seen = { errors: watch(page), bad: [] as string[], natives: [] as string[], requests: 0, popups: 0 };
+    const seen = { errors: watch(page, r.side.baseUrl), bad: [] as string[], natives: [] as string[], requests: 0, popups: 0 };
     page.on('request', () => { seen.requests++; });
     page.on('response', (res) => { if (res.status() >= 500 && site(res.url()) === site(r.side.baseUrl)) seen.bad.push(`${res.status()} ${res.request().method()} ${new URL(res.url()).pathname}`); });
     page.on('popup', (p) => { seen.popups++; p.close().catch(() => {}); });
@@ -165,7 +169,30 @@ export async function run(r: Run) {
         seen.natives.push(`${d.type()}("${d.message().slice(0, 60)}")`);
         d.dismiss().catch(() => {});
     });
+    const clear = () => { seen.errors.length = seen.bad.length = seen.natives.length = seen.requests = seen.popups = 0; };
     const wait = async () => { await page.waitForTimeout(WAIT); if (seen.requests) await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {}); };
+    /**
+     * Clicks `el` and says what happened; null when it couldn't be clicked (covered or gone). `mutations` is undefined when
+     * the click loaded a new document (it has no counter), which is a change too. `on`: the control was the selected one
+     * (the tab showing, the current page), so it had nothing to do. `from` is the address the click is judged against.
+     */
+    const press = async (el: Locator, from: string) => {
+        clear();
+        const on = await el.evaluate((e) => {
+            const w = window as any;
+            w.__tapcheckObserver ??= new MutationObserver((m) => { w.__tapcheck += m.length; });
+            w.__tapcheckObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+            w.__tapcheck = 0;
+            return ['aria-selected', 'aria-pressed', 'aria-checked'].some((a) => e.getAttribute(a) === 'true') || (e.getAttribute('aria-current') ?? 'false') !== 'false';
+        }).catch(() => false);
+        if (await el.click({ timeout: 3000 }).then(() => false, () => true)) return null;
+        await wait();
+        const mutations = await page.evaluate(() => (window as any).__tapcheck as number | undefined).catch(() => undefined);
+        const moved = page.url().replace(/#$/, '') !== from.replace(/#$/, '');
+        return { on, mutations, did: mutations !== 0 || moved || !!seen.requests || !!seen.natives.length || !!seen.popups };
+    };
+    const deadOn = new Map<string, string[]>(); // each dead label and the screens it is on: reported once, on the first
+    const idle: { path: string; labels: string[]; known: string[]; shot?: string }[] = []; // per screen: the dead labels first found there, and those found before
 
     try {
         for (const path of paths) {
@@ -173,7 +200,6 @@ export async function run(r: Run) {
             const still = (u: string) => (hashRoute(path) ? u : u.split('#')[0]);
             const broke: string[] = [], failed: string[] = [], native: string[] = [], dead: string[] = [], clicked: string[] = [];
             const who = { broke: [] as string[], failed: [] as string[], native: [] as string[] }; // the labels behind those lists, for a marked screenshot
-            const clear = () => { seen.errors.length = seen.bad.length = seen.natives.length = seen.requests = seen.popups = 0; };
             const drain = (label: string) => {
                 if (seen.errors.length) { broke.push(`"${label}": ${seen.errors[0].slice(0, 120)}`); who.broke.push(label); }
                 if (seen.bad.length) { failed.push(`"${label}" → ${seen.bad[0]}`); who.failed.push(label); }
@@ -190,20 +216,11 @@ export async function run(r: Run) {
                     const el = page.locator(`[data-tapcheck="${c.i}"]`);
                     if (fresh.find((x) => x.i === c.i)?.label !== c.label || !(await el.isVisible().catch(() => false))) continue; // the page changed under it
                     if (c.href) followed.add(c.href);
-                    clear();
-                    await page.evaluate(() => {
-                        const w = window as any;
-                        w.__tapcheckObserver ??= new MutationObserver((m) => { w.__tapcheck += m.length; });
-                        w.__tapcheckObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
-                        w.__tapcheck = 0;
-                    });
-                    if (await el.click({ timeout: 3000 }).then(() => false, () => true)) continue; // covered or gone: not clicked
-                    await wait();
+                    const p = await press(el, home);
+                    if (!p) continue; // covered or gone: not clicked
+                    const { mutations } = p;
                     clicked.push(c.label);
-                    // Did anything happen? A new document has no counter, which is a change too.
-                    const mutations = await page.evaluate(() => (window as any).__tapcheck as number | undefined).catch(() => undefined);
-                    const moved = page.url().replace(/#$/, '') !== home.replace(/#$/, '');
-                    if (mutations === 0 && !moved && !seen.requests && !seen.natives.length && !seen.popups) dead.push(c.label);
+                    if (!p.did && !p.on) dead.push(c.label);
 
                     const d = still(page.url()) === still(home) ? await shown(page) : null;
                     if (d) {
@@ -238,6 +255,17 @@ export async function run(r: Run) {
                     drain(c.label);
                     await page.keyboard.press('Escape').catch(() => {}); // close what the click opened
                     if (mutations === undefined || still(page.url()) !== still(home) || await shown(page)) await reopen();
+                }
+
+                // A dead control beside one that did something may be the group's selected one, marked by its looks alone
+                // ("All 46" of a row of filters): with the neighbour clicked first it must do something, or it is dead.
+                for (const label of dead.filter((l) => !deadOn.has(l))) {
+                    await reopen();
+                    const c = fresh.find((x) => x.label === label);
+                    const near = c && fresh.find((x) => x.group === c.group && x !== c && clicked.includes(x.label) && !dead.includes(x.label));
+                    if (!near || !(await press(page.locator(`[data-tapcheck="${near.i}"]`), page.url()))) continue;
+                    if ((await press(page.locator(`[data-tapcheck="${c.i}"]`), page.url()))?.did) dead.splice(dead.indexOf(label), 1);
+                    clear(); // what these clicks raised was filed the first time
                 }
 
                 // Tables: each one once per run (a list looks the same on every page it is on).
@@ -275,15 +303,22 @@ export async function run(r: Run) {
 
                 // MARK=1: the screen once more, and each failing check's controls boxed, those that are still there under the same label.
                 const now = r.cfg.marks && (broke.length || failed.length || native.length || dead.length) ? await open(r, page, path).then(() => tag(page, own, r.cfg.crawl.skip)).catch(() => []) : [];
-                const rec = async (check: string, status: Status, detail: string | undefined, labels: string[], note: string) => {
+                const shoot = async (check: string, status: Status, detail: string | undefined, labels: string[], note: string) => {
                     const marks = status === 'pass' ? [] : now.filter((c) => labels.includes(c.label)).map((c) => ({ target: `[data-tapcheck="${c.i}"]`, note }));
-                    const shot = marks.length ? await marked(r, page, `interact ${path} ${check}`, { status, title: check, detail: `${path} · ${detail}` }, marks) : undefined;
+                    return marks.length ? marked(r, page, `interact ${path} ${check}`, { status, title: check, detail: `${path} · ${detail}` }, marks) : undefined;
+                };
+                const rec = async (check: string, status: Status, detail: string | undefined, labels: string[], note: string) => {
+                    const shot = await shoot(check, status, detail, labels, note);
                     r.record({ suite: S, where: path, check, status, detail, evidence: shot ? [shot] : undefined });
                 };
                 await rec('clicks raise no page or console errors', broke.length ? 'fail' : 'pass', broke.slice(0, 4).join(' | ') || `${clicked.length} control(s) clicked`, who.broke, 'raised an error');
                 await rec('clicks set off no 5xx', failed.length ? 'fail' : 'pass', failed.slice(0, 4).join('; ') || undefined, who.failed, 'set off a 5xx');
                 await rec('no native alert, confirm or prompt', native.length ? 'fail' : 'pass', native.slice(0, 4).join('; ') || undefined, who.native, 'opened a native dialog');
-                await rec('every control does something', dead.length ? 'warn' : 'pass', dead.length ? `nothing changed after: ${dead.slice(0, 6).map((l) => `"${l}"`).join(', ')}` : undefined, dead, 'nothing changed');
+                // Recorded when the run ends: a label dead on every screen (a status pill in the header) is one finding, on the first.
+                const labels = dead.filter((l) => !deadOn.has(l));
+                for (const l of new Set(dead)) deadOn.set(l, [...(deadOn.get(l) ?? []), path]);
+                idle.push({ path, labels, known: [...new Set(dead)].filter((l) => !labels.includes(l)),
+                    shot: await shoot('every control does something', labels.length ? 'warn' : 'pass', `nothing changed after: ${labels.map((l) => `"${l}"`).join(', ')}`, labels, 'nothing changed') });
             } catch (e) {
                 if (e instanceof SessionExpired) throw e;
                 r.record({ suite: S, where: path, check: 'sweep ran', status: 'fail', detail: (e as Error).message.slice(0, 200) });
@@ -291,6 +326,12 @@ export async function run(r: Run) {
             log.screens.push({ path, clicked, dead });
         }
     } finally {
+        for (const s of idle) {
+            const also = (l: string) => { const more = deadOn.get(l)!.filter((p) => p !== s.path); return more.length ? ` (also on ${more.slice(0, 5).join(', ')})` : ''; };
+            r.record({ suite: S, where: s.path, check: 'every control does something', status: s.labels.length ? 'warn' : 'pass', evidence: s.shot ? [s.shot] : undefined,
+                detail: s.labels.length ? `nothing changed after: ${s.labels.slice(0, 6).map((l) => `"${l}"${also(l)}`).join(', ')}`
+                    : s.known.slice(0, 6).map((l) => `"${l}" is reported on ${deadOn.get(l)![0]}`).join(', ') || undefined });
+        }
         writeFileSync(`${r.dir}/interact.json`, JSON.stringify(log, null, 2));
         await ctx.close();
     }

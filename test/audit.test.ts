@@ -66,3 +66,43 @@ test('audit: button sizes, cut-off text, a white background in dark mode, token 
     assert.deepEqual(found.filter((f) => f.status === 'info').map((f) => f.check), []);
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(`${tmp}/audit.json`, 'utf8')).screens[0].views), ['desktop', 'menu "More"', 'dark', 'tablet', 'phone']);
 });
+
+// A floating chat button over a control, and under it whatever the page needs: a long page, a short one.
+const CHAT = '<button style="position: fixed; right: 16px; bottom: 16px; width: 120px; height: 48px">Chat</button>';
+const under = (label: string) => `<button style="position: absolute; right: 26px; top: 540px; width: 100px; height: 40px">${label}</button>`;
+const page = (body: string) => `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>t</title><style>body { margin: 0; background: #f7f8f7; color: #111111 }</style><body><h1>t</h1>${body}</body></html>`;
+const PAGES: Record<string, () => string> = {
+    // The page scrolls, so the button under the chat button can be moved clear of it; so can the chip under the arrow of its row.
+    '/long': () => page(`${CHAT}${under('Export')}<div style="height: 2000px"></div>
+        <div style="position: absolute; top: 100px; left: 0; width: 300px"><div style="overflow-x: auto; white-space: nowrap">${['One', 'Two', 'Three', 'Four', 'Five', 'Six'].map((c) => `<button style="width: 90px; height: 40px">${c}</button>`).join('')}</div>
+        <button aria-label="Scroll right" style="position: absolute; right: 0; top: 0; width: 40px; height: 40px">›</button></div>`),
+    // Nowhere to scroll to: the button stays under the chat button.
+    '/short': () => page(`${CHAT}${under('Delete account')}`),
+    // A long page, and two buttons of it drawn on each other: they scroll together.
+    '/stack': () => page(`<div style="height: 2000px"></div><button style="position: absolute; left: 20px; top: 200px; width: 100px; height: 40px">Save</button><button style="position: absolute; left: 40px; top: 210px; width: 100px; height: 40px">Cancel</button>`),
+    // Live data: a price in another colour on every load, and no dark theme.
+    '/live': () => page(`<p style="color: rgb(${++loads}, 0, 0); background: rgb(0, ${loads}, 0)">101.50</p>`),
+    '/themed': () => page('<style>@media (prefers-color-scheme: dark) { body { background: #111111; color: #eeeeee } }</style><p>Plants</p>'),
+};
+let loads = 0;
+
+test('audit: an overlap that scrolling undoes is none, and dark mode is told by the large surfaces', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-audit-`);
+    const server = createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }).end(PAGES[req.url!]?.() ?? ''); });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    after(async () => { await closeBrowser(); server.close(); });
+    process.env.JEV = 'off';
+    const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }],
+        screens: Object.keys(PAGES).map((path) => ({ name: path.slice(1), path })) }, tmp);
+    const found: Omit<Finding, 'side'>[] = [];
+    await audit.run({ cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } });
+    const at = (where: string, check: string) => { const f = found.find((x) => x.where === where && x.check === check); return `${f?.status}: ${f?.detail ?? ''}`; };
+
+    assert.equal(at('long · desktop', 'controls do not overlap'), 'pass: ');
+    assert.equal(at('short · desktop', 'controls do not overlap'), 'fail: 1: Chat ↔ Delete account');
+    assert.equal(at('stack · desktop', 'controls do not overlap'), 'fail: 1: Save ↔ Cancel');
+
+    assert.match(at('live · dark', 'dark mode'), /^info: skipped: the page looks the same/);
+    assert.equal(at('themed · dark', 'dark mode'), 'undefined: ');
+    assert.equal(at('themed · dark', 'dark mode: no background left white'), 'pass: ');
+});
