@@ -75,6 +75,9 @@ Read the routes file, the navigation template and the seed data. You need:
   project's own language that prints a Playwright storageState JSON, `{"cookies": [...], "origins": []}`); else
   `manual` (a browser window opens and the user signs in once; the session is kept in `.tapcheck/`). Don't switch a
   security setting off (forced two-step, captcha) to make `form` work: add `totp`, or use `command`.
+  If the app shows its sign-in form at the same address when the session ends (a single-page app, hash routes) rather
+  than redirecting, give the side a `signedIn` selector that every signed-in screen has and the sign-in form doesn't
+  (the account menu, the main navigation); check it on each screen at each viewport.
 - **Screens**: the 3 to 8 pages that matter most on each side, each with a `purpose`.
 - **Tasks**: 1 to 3 things a first-time user comes to do, reachable by clicking alone.
 - **Audience**: who the app is for, in a few words.
@@ -230,6 +233,8 @@ and is there only when the file has `gates` or `routes`. The app's own log lines
   page. Fix the pattern (it is tested against each link's path), or seed data so the list isn't empty.
 - "Sent to sign in at …: the session has expired": on a `manual` side run again with `LOGIN=1`; otherwise the page
   redirects to sign-in for this user, so take it out of that side's screens.
+- "… has no <selector> on it: the session has expired": on a `manual` side run again with `LOGIN=1`; if the session
+  is good, that screen lacks the `signedIn` selector, so pick one every signed-in screen has.
 - A run that ends with a `Report: …/report.html` line completed, whatever its exit code (1 means it has failing
   findings). That is success for setup. Read `findings.json` in that folder for the summary; each entry has
   `suite`, `side`, `where`, `check`, `status` (`fail`, `warn`, `info`, `pass`), `detail` and `evidence` paths.

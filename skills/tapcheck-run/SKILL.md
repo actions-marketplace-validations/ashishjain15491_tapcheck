@@ -64,7 +64,8 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
   they are included; `SKIP=flow` leaves them out, `RESET=1` runs `app.reset` first to start from clean data. Use
   `RESET=1` only when the user asks or has agreed: it wipes the test database.
 - A side with `login: manual` opens a browser window for the user to sign in the first time; tell them before you
-  start. `LOGIN=1` makes it ask again when the saved session has expired.
+  start. `LOGIN=1` makes it ask again when the saved session has expired. The saved session is written again as each
+  part ends, so it stays good across a long run; a side that stops as "session expired" partway needs `LOGIN=1`.
 - `CONTRACT_UPDATE=1` accepts the current JSON response shapes as the new baseline. Only when the user confirms the
   API change was intended.
 - If `tapcheck.yml` has `app.resetWhen`, `app.reset` runs by itself when one of those files changed since the last
