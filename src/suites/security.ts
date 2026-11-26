@@ -11,7 +11,7 @@
  * - no requests to third-party hosts outside security.allowedHosts, listed with the page that made them.
  */
 import { request as pwRequest } from 'playwright';
-import { abs, context, host, type Run } from '../browser.ts';
+import { abs, context, host, site, type Run } from '../browser.ts';
 import { run as runCrawl } from './crawl.ts';
 
 export const SECRETS: [string, RegExp][] = [
@@ -107,11 +107,10 @@ export async function run(r: Run) {
         }
 
         // Third-party requests.
-        const own = host(base);
         const third = new Map<string, Set<string>>();
         for (const h of r.crawl.hits) {
             const hh = host(h.url);
-            if (!hh || hh === own || r.cfg.security.allowedHosts.includes(hh)) continue;
+            if (!hh || site(h.url) === site(base) || r.cfg.security.allowedHosts.includes(hh)) continue; // the app's own subdomains aren't a third party
             if (!third.has(hh)) third.set(hh, new Set());
             third.get(hh)!.add(h.page);
         }

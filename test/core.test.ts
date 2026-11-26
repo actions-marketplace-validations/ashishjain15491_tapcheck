@@ -7,7 +7,7 @@ import { check, expand, isLocal } from '../src/config.ts';
 import { off, totp } from '../src/auth.ts';
 import { UNSAFE } from '../src/suites/usability.ts';
 import { expected } from '../src/report.ts';
-import { guard, SessionExpired, type Run } from '../src/browser.ts';
+import { guard, SessionExpired, site, type Run } from '../src/browser.ts';
 import { endpoint, shape } from '../src/suites/contract.ts';
 import { leaksIn } from '../src/suites/security.ts';
 import { findings, record, write } from '../src/report.ts';
@@ -110,6 +110,18 @@ test('contract: ids normalised, shapes keyed', () => {
     assert.equal(endpoint('GET', 'http://x/a/01m7azs8q2k3v4b5n6m7p8r9/b'), 'GET /a/{id}/b');
     assert.equal(endpoint('POST', 'http://x/u/3f2504e0-4f89-11d3-9a0c-0305e82c3301'), 'POST /u/{id}');
     assert.equal(endpoint('GET', 'http://x/settings/account'), 'GET /settings/account');
+    // A call to the app's API on another host is named with that host; one to its own host is not.
+    assert.equal(endpoint('GET', 'https://api.shop.com/orders/7', 'https://app.shop.com'), 'GET api.shop.com/orders/{id}');
+    assert.equal(endpoint('GET', 'https://app.shop.com/orders/7', 'https://app.shop.com'), 'GET /orders/{id}');
+});
+
+test("site: an app's subdomains are one site; a shared host, an IP and localhost are not", () => {
+    assert.equal(site('https://app.shop.com/x'), site('https://api.shop.com/y'));
+    assert.equal(site('https://www.shop.co.uk'), 'shop.co.uk');
+    assert.notEqual(site('https://mine.vercel.app'), site('https://theirs.vercel.app'));
+    assert.notEqual(site('http://a.localhost:3000'), site('http://b.localhost:3000'));
+    assert.equal(site('http://127.0.0.1:8000'), '127.0.0.1');
+    assert.notEqual(site('https://app.shop.com'), site('https://shop.io'));
     assert.deepEqual(shape('{"b":1,"a":2}'), ['a', 'b']);
     assert.deepEqual(shape('[1]'), ['[array]']);
     assert.equal(shape('nope'), null);

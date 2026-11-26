@@ -65,7 +65,7 @@ design:                             # optional design tokens; the audit warns ab
 
 security:
   csrf: { method: POST, path: /orders, expect: 419 }   # sent without a token on each side that signs in (every side if none does); must be refused with exactly `expect`
-  allowedHosts: [fonts.example.com] # third-party hosts the pages may call; any other is a failing finding
+  allowedHosts: [fonts.example.com] # third-party hosts the pages may call; any other is a failing finding (the app's own subdomains, api.example.com, aren't third-party)
   publicWrites: "^/(login|webhooks/)"  # POST/PUT/PATCH/DELETE routes that need no sign-in on purpose (see routes)
 
 viewports:                          # default: these two. a11y and ux run on each; interact and audit use the first that isn't mobile
@@ -116,6 +116,9 @@ shows its sign-in form in place, at the same address (common with hash routes), 
 `signedIn`, a selector on every signed-in page and not on the sign-in form (the account menu, say). A page without it
 ends the side the same way, and a manual sign-in waits for it too. The session is saved again as each part ends, so
 sign-ins whose tokens change on every refresh (Supabase, Auth0, Cognito) stay good for the next part and the next run.
+What is saved again is the cookies and the local storage entries that hold the sign-in (names with `auth`, `token`,
+`session`, `jwt`, `cred` or `sb-`); the rest of local storage stays as it was at sign-in, so a filter or tab one part
+changed isn't carried into the next.
 
 ## screens
 

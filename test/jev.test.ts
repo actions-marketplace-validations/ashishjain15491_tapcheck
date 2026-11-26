@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { after, test } from 'node:test';
 import { closeBrowser, type Run } from '../src/browser.ts';
 import { check } from '../src/config.ts';
-import { ask, bad, BudgetReached, good, savePayloads, setup, status, to10, usage, type Client } from '../src/jev.ts';
+import { ask, bad, BudgetReached, good, savePayloads, scoreStatus, setup, status, to10, usage, type Client } from '../src/jev.ts';
 import type { Finding } from '../src/report.ts';
 import * as usability from '../src/suites/usability.ts';
 import * as ux from '../src/suites/ux.ts';
@@ -139,6 +139,8 @@ test('ux and usability: a tiny page, judged by a fake Jev', async () => {
     assert.equal(st('Home', 'visual: loaded'), 'pass');
     assert.equal(st('Home', 'visual: overlap'), 'warn'); // p=0.5 is unsure
     assert.match(at('Home', 'design: cta')!.detail!, /^9\.1\/10/);
+    // A score of 7 passes, a near miss warns, a low score fails unless Jev was split on it.
+    assert.deepEqual([[7, 0.9], [6.9, 0.9], [5.5, 0.9], [5.4, 0.9], [3, 0.2]].map(([v, c]) => scoreStatus(v, c)), ['pass', 'warn', 'warn', 'fail', 'warn']);
     assert.equal(st('Home', 'guerrilla: right job picked'), 'fail'); // the fake reads every screen as the "ask" one
     assert.equal(st('Ask', 'guerrilla: right job picked'), 'pass');
     assert.equal(st('Home', 'attention: main CTA among first three looks'), 'pass');

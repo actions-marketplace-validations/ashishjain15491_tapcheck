@@ -33,6 +33,24 @@ const WARN = new Set(['shortened text can be read in full', 'heading levels in o
 const MARKS: Record<string, string> = { 'no sideways scroll': 'wide', 'text is not cut off': 'cut', 'shortened text can be read in full': 'short', 'controls do not overlap': 'overlap',
     'targets at least 24 px': 'small', 'images have alt text': 'alt' };
 const TABS = 20, MAX_POPUPS = 4;
+
+/**
+ * The opened menu or dialog ([data-tapcheck-popup]) cut out of the screen, at least 280 px a side (the least Jev takes),
+ * saved as `file`. Undefined when it fills most of the screen anyway (a full-screen dialog) or has no box.
+ */
+export async function popupShot(page: Page, file: string): Promise<string | undefined> {
+    const vp = page.viewportSize();
+    const b = await page.locator('[data-tapcheck-popup]').last().boundingBox().catch(() => null);
+    if (!vp || !b || b.width * b.height > 0.6 * vp.width * vp.height) return undefined;
+    const side = (start: number, size: number, limit: number) => {
+        const s = Math.min(limit, Math.max(280, Math.ceil(size))), at = Math.max(0, Math.min(Math.floor(start - (s - size) / 2), limit - s));
+        return [at, s];
+    };
+    const [x, width] = side(Math.max(0, b.x), Math.min(b.width, vp.width), vp.width), [y, height] = side(Math.max(0, b.y), Math.min(b.height, vp.height), vp.height);
+    await page.screenshot({ path: file, clip: { x, y, width, height } });
+    return file;
+}
+
 const POPUP = '[role=menu], [role=listbox], dialog[open], [role=dialog], [role=alertdialog], [popover]:popover-open';
 // ponytail: primary, secondary and danger is the most a button kind gets before its colours count as inconsistent; fields get one.
 const PAINTS: Record<string, number> = { button: 3, 'icon button': 3, 'text button': 2 };
@@ -290,7 +308,10 @@ export async function run(r: Run) {
                 const p = await page.evaluate(measure, { root: '[data-tapcheck-popup]', extras: false });
                 await emit(page, t, `${found} "${label}"`, at, p.problems, [shot]);
                 const { loaded: _, ...questions } = VISUAL; // a menu isn't a screen that loads
-                await look(at, `${key}-popup-${opened}`, { screen: `${t.name}, after "${label}" was clicked`, viewport: `desktop, ${desktop.width} × ${desktop.height} px` }, questions, [shot]);
+                // Jev sees the menu or dialog alone: the page around it is covered on purpose, and isn't what is asked about.
+                const crop = jevOff ? undefined : await popupShot(page, `${r.dir}/shots/${key}-popup-${opened}-alone.png`);
+                await look(at, `${key}-popup-${opened}`, { screen: `${t.name}, after "${label}" was clicked`, viewport: `desktop, ${desktop.width} × ${desktop.height} px`,
+                    note: crop ? `The screenshot shows only the ${found} that opened, cut out of the screen; any of the page at its edges is not part of the question.` : undefined }, questions, [crop ?? shot]);
             }
             await page.keyboard.press('Escape').catch(() => {});
             await page.waitForTimeout(150);

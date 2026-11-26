@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import type { Screen } from '../config.ts';
 import { abs, context, facts, open, resolve, SessionExpired, slices, slug, watch, type Run } from '../browser.ts';
-import { ask, bad, BudgetReached, good, img, MIN_SCORE, status, to10 } from '../jev.ts';
+import { ask, bad, BudgetReached, good, img, MIN_SCORE, scoreStatus, status, to10 } from '../jev.ts';
 import { ATTENTION, ATTENTION_CHECK, ATTENTION_MODEL, DESIGN, guerrilla, HEURISTICS, purposeKey, VISUAL } from '../questions.ts';
 
 const S = 'ux';
@@ -29,7 +29,7 @@ const REVIEW_BELOW = 0.3;
 function scored(r: Run, where: string, check: string, a: { score: number; confidence: number }, ev: string[]) {
     const v = to10(a.score);
     const review = v < MIN_SCORE && a.confidence < REVIEW_BELOW;
-    r.record({ suite: S, where, check, status: v >= MIN_SCORE ? 'pass' : review ? 'warn' : 'fail',
+    r.record({ suite: S, where, check, status: scoreStatus(v, a.confidence, REVIEW_BELOW),
         detail: `${v}/10 (confidence ${a.confidence.toFixed(2)})${review ? ' · needs review: Jev was split' : ''}`, evidence: ev });
 }
 

@@ -23,7 +23,7 @@
 import { writeFileSync } from 'node:fs';
 import type { Locator, Page } from 'playwright';
 import { isLocal } from '../config.ts';
-import { context, hashRoute, host, marked, open, reach, SessionExpired, watch, type Run } from '../browser.ts';
+import { context, hashRoute, host, marked, site, open, reach, SessionExpired, watch, type Run } from '../browser.ts';
 import type { Finding } from '../report.ts';
 import { UNSAFE } from './usability.ts';
 
@@ -158,7 +158,7 @@ export async function run(r: Run) {
     // What a click set off, collected until drain() files it under the control's label.
     const seen = { errors: watch(page), bad: [] as string[], natives: [] as string[], requests: 0, popups: 0 };
     page.on('request', () => { seen.requests++; });
-    page.on('response', (res) => { if (res.status() >= 500 && host(res.url()) === own) seen.bad.push(`${res.status()} ${res.request().method()} ${new URL(res.url()).pathname}`); });
+    page.on('response', (res) => { if (res.status() >= 500 && site(res.url()) === site(r.side.baseUrl)) seen.bad.push(`${res.status()} ${res.request().method()} ${new URL(res.url()).pathname}`); });
     page.on('popup', (p) => { seen.popups++; p.close().catch(() => {}); });
     page.on('dialog', (d) => { // leaving a page may ask; alert, confirm and prompt are findings, and are never agreed to
         if (d.type() === 'beforeunload') { d.accept().catch(() => {}); return; }

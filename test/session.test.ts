@@ -31,6 +31,16 @@ test('session: signedIn catches a sign-in form shown in place, and each context 
     await ctx.close();
     assert.match(readFileSync(file, 'utf8'), /"value": "ok[1-9]/); // the token it was handed, for the next context
 
+    // Local storage: a token the page renews is saved, a filter the run changed is not, and one the user chose at sign-in stays.
+    const origin = { origin: base, localStorage: [{ name: 'sb-app-auth-token', value: 't0' }, { name: 'filters', value: 'etfs=on' }] };
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), origins: [origin] }));
+    ctx = await context(r, cfg.viewports[0]);
+    const page = await ctx.newPage();
+    await open(r, page, '/#orders');
+    await page.evaluate(() => { localStorage.setItem('sb-app-auth-token', 't1'); localStorage.setItem('filters', 'etfs=off'); localStorage.setItem('tab', 'saved'); });
+    await ctx.close();
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).origins, [{ origin: base, localStorage: [{ name: 'sb-app-auth-token', value: 't1' }, { name: 'filters', value: 'etfs=on' }] }]);
+
     state('gone');
     ctx = await context(r, cfg.viewports[0]);
     await assert.rejects(open(r, await ctx.newPage(), '/#orders'), (e: Error) => e instanceof SessionExpired && /#account/.test(e.message) && /LOGIN=1/.test(e.message));

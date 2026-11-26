@@ -125,7 +125,7 @@
             "additionalProperties": false,
             "properties": {
                 "csrf": { "$ref": "#/definitions/csrf" },
-                "allowedHosts": { "description": "Third-party hosts the pages may call; a request to any other is a failing finding.", "type": "array", "items": { "type": "string" }, "default": [] },
+                "allowedHosts": { "description": "Third-party hosts the pages may call; a request to any other is a failing finding. The app's own subdomains (api.example.com for app.example.com) are not third-party.", "type": "array", "items": { "type": "string" }, "default": [] },
                 "publicWrites": { "$ref": "#/definitions/text", "description": "Regular expression (case-insensitive) of POST/PUT/PATCH/DELETE routes that need no sign-in on purpose, e.g. ^/(login|webhooks/)." }
             }
         },

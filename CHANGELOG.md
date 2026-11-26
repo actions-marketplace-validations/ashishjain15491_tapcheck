@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Fixes from reviewing a long run on a real app, for false alarms and for what the run didn't see.
+
+- **The app's API on another subdomain is the app's.** `contract` checks calls to every host of the app's site
+  (`api.example.com` for an app at `app.example.com`), each named with its host, and `interact`'s "no 5xx" check
+  counts them too; `security` doesn't call them third-party. A name on a shared host (`my-app.vercel.app`) stands alone.
+- **Screens that scroll a panel, not the page.** Where the document doesn't scroll but a panel filling the screen does
+  (an app shell), Jev's slices scroll that panel, so what is below the first screen is seen.
+- **A menu or dialog is judged on its own.** `audit` gives Jev the opened menu or dialog cut out of the screen, so the
+  page it covers on purpose no longer reads as clipped, overlapping or out of line.
+- **Near misses warn.** A Jev score from 5.5 to just under 7 is a warning; under 5.5 still fails.
+- **The saved session keeps only the sign-in.** Saving the session as each part ends keeps the cookies and the sign-in
+  entries of local storage; the rest stays as it was at sign-in, so a filter or tab `interact` changed isn't carried
+  into the next part or run.
+
 ## 0.1.3 (2026-11-26)
 
 - **Hash-routed apps.** A screen at `/#scanner` or `/#/orders` is its own page: it is loaded afresh (so it has an

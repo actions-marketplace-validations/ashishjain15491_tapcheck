@@ -4,20 +4,20 @@
  * - a JSON content type always carries JSON that parses, and every response says its content type;
  * - an XHR/fetch call never gets a whole HTML document back (a login or error page served to a script);
  * - XHR/fetch latency: p95 under P95_MS;
- * - response shape: the top-level keys of each JSON endpoint (ids in the path normalised) against the saved baseline
+ * - response shape: the top-level keys of each JSON endpoint (ids in the path normalised), the app's own calls being those to its site's hosts (api.<domain> too) against the saved baseline
  *   `contract-<side>.json` in the out folder; a key that disappeared is a breaking change. CONTRACT_UPDATE=1 rewrites
  *   the baseline; the first run creates it.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { host, type Run } from '../browser.ts';
+import { host, site, type Run } from '../browser.ts';
 import { run as runCrawl } from './crawl.ts';
 
 const P95_MS = 800;
 
-/** /reports/01m7azs8…/stats → /reports/{id}/stats, so one endpoint is one contract. */
-export const endpoint = (method: string, url: string) => {
+/** /reports/01m7azs8…/stats → /reports/{id}/stats, so one endpoint is one contract; a call to another host than `base` (the app's API) is named with its host. */
+export const endpoint = (method: string, url: string, base?: string) => {
     const u = new URL(url);
-    return `${method} ${u.pathname.split('/').map((p) => (/^[0-9]+$|^[0-9a-z]{20,}$|^[0-9a-f-]{32,36}$/i.test(p) ? '{id}' : p)).join('/')}`;
+    return `${method} ${base && u.host !== host(base) ? u.host : ''}${u.pathname.split('/').map((p) => (/^[0-9]+$|^[0-9a-z]{20,}$|^[0-9a-f-]{32,36}$/i.test(p) ? '{id}' : p)).join('/')}`;
 };
 export function shape(body: string): string[] | null {
     try {
@@ -29,9 +29,10 @@ export function shape(body: string): string[] | null {
 export async function run(r: Run) {
     const S = 'contract';
     if (!r.crawl.done) await runCrawl(r);
-    const own = r.crawl.hits.filter((h) => host(h.url) === host(r.side.baseUrl));
+    // The app's own requests: its host, and the other hosts of its site (an API at api.<domain>).
+    const own = r.crawl.hits.filter((h) => site(h.url) === site(r.side.baseUrl));
     const calls = own.filter((h) => ['xhr', 'fetch'].includes(h.type));
-    const where = (h: { method: string; url: string; page: string; status?: number }) => `${h.status ? `${h.status} ` : ''}${endpoint(h.method, h.url)} (on ${h.page})`;
+    const where = (h: { method: string; url: string; page: string; status?: number }) => `${h.status ? `${h.status} ` : ''}${endpoint(h.method, h.url, r.side.baseUrl)} (on ${h.page})`;
 
     const server = own.filter((h) => h.status >= 500);
     r.record({ suite: S, where: 'all requests', check: 'no 5xx responses', status: server.length ? 'fail' : 'pass',
@@ -40,12 +41,12 @@ export async function run(r: Run) {
     r.record({ suite: S, where: 'XHR/fetch', check: "no 4xx from the app's own calls", status: client.length ? 'fail' : 'pass',
         detail: client.slice(0, 8).map(where).join('; ') || `${calls.length} calls` });
     const badJson = calls.filter((h) => h.json === 'invalid');
-    r.record({ suite: S, where: 'XHR/fetch', check: 'JSON responses parse', status: badJson.length ? 'fail' : 'pass', detail: badJson.slice(0, 5).map((h) => endpoint(h.method, h.url)).join('; ') || undefined });
+    r.record({ suite: S, where: 'XHR/fetch', check: 'JSON responses parse', status: badJson.length ? 'fail' : 'pass', detail: badJson.slice(0, 5).map((h) => endpoint(h.method, h.url, r.side.baseUrl)).join('; ') || undefined });
     const noType = own.filter((h) => !h.contentType && h.status >= 200 && h.status < 300 && h.status !== 204);
-    r.record({ suite: S, where: 'all requests', check: 'content type declared', status: noType.length ? 'warn' : 'pass', detail: noType.slice(0, 5).map((h) => endpoint(h.method, h.url)).join('; ') || undefined });
+    r.record({ suite: S, where: 'all requests', check: 'content type declared', status: noType.length ? 'warn' : 'pass', detail: noType.slice(0, 5).map((h) => endpoint(h.method, h.url, r.side.baseUrl)).join('; ') || undefined });
     const htmlDocs = calls.filter((h) => /text\/html/.test(h.contentType) && /<!doctype html|<html[\s>]/i.test(h.body ?? ''));
     r.record({ suite: S, where: 'XHR/fetch', check: 'no whole HTML documents to scripts', status: htmlDocs.length ? 'fail' : 'pass',
-        detail: htmlDocs.slice(0, 5).map((h) => `${endpoint(h.method, h.url)} (on ${h.page})`).join('; ') || undefined });
+        detail: htmlDocs.slice(0, 5).map((h) => `${endpoint(h.method, h.url, r.side.baseUrl)} (on ${h.page})`).join('; ') || undefined });
 
     const times = calls.map((h) => h.ms).sort((a, b) => a - b);
     const p95 = times.length ? times[Math.min(times.length - 1, Math.floor(times.length * 0.95))] : 0;
@@ -56,7 +57,7 @@ export async function run(r: Run) {
     for (const h of calls) {
         if (h.json !== 'ok' || h.status >= 300 || (h.body?.length ?? 0) >= 400) continue;
         const keys = shape(h.body ?? '');
-        if (keys) now[endpoint(h.method, h.url)] = keys;
+        if (keys) now[endpoint(h.method, h.url, r.side.baseUrl)] = keys;
     }
     const file = `${r.cfg.out}/contract-${r.side.name}.json`;
     const had = existsSync(file);

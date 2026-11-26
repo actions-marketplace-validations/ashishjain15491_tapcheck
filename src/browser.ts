@@ -3,7 +3,7 @@
  * not), page settling, the facts code can measure on a page, screenshot slices, marked screenshots, and the Run each
  * suite is handed.
  */
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Locator, type Page } from 'playwright';
 import type { Config, Screen, Side } from './config.ts';
 import type { Finding } from './report.ts';
@@ -88,6 +88,22 @@ export function routedMethod(q: { method(): string; url(): string; headers(): Re
 /** A screen's address: a path on the side's base URL, or a full URL as given. */
 export const abs = (r: Run, path: string) => (/^https?:\/\//.test(path) ? path : r.side.baseUrl + path);
 export const host = (u: string) => { try { return new URL(u).host; } catch { return ''; } };
+// Hosts where each name under them is someone else's site, so the app's site is the full name.
+const SHARED = /\.(vercel\.app|netlify\.app|github\.io|herokuapp\.com|pages\.dev|workers\.dev|onrender\.com|fly\.dev|web\.app|firebaseapp\.com|azurewebsites\.net|cloudfront\.net|amazonaws\.com|appspot\.com|ngrok-free\.app|ngrok\.io|railway\.app|up\.railway\.app|localhost)$/;
+/**
+ * The site a URL belongs to: its domain without subdomains (app.example.com and api.example.com are both example.com),
+ * so an app's own API on another subdomain counts as the app. A bare host, an IP address and a name on a shared host
+ * (my-app.vercel.app) stand alone.
+ */
+// ponytail: last two labels (three for co.uk-style names), not the public suffix list; add a list entry if a shared host is missed
+export const site = (u: string) => {
+    let h: string;
+    try { h = new URL(u).hostname; } catch { return ''; }
+    if (!h.includes('.') || /^[\d.]+$|:/.test(h) || SHARED.test(h)) return h;
+    const parts = h.split('.');
+    const n = parts.length > 2 && parts.at(-1)!.length === 2 && parts.at(-2)!.length <= 3 ? 3 : 2;
+    return parts.slice(-n).join('.');
+};
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'unlabelled';
 
 /**
@@ -99,6 +115,27 @@ export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').r
 /** The contexts that carry the side's session (and still have it). */
 const authed = new WeakSet<BrowserContext>();
 
+/** A local storage entry that holds a sign-in rather than what the user chose (a filter, a tab, a theme). */
+const SIGN_IN = /auth|token|session|jwt|cred|sb-/i;
+/**
+ * Saves the session `ctx` ends with to `file`: every cookie, and of local storage only the sign-in entries. Every other
+ * entry stays as it was saved at sign-in, so what a run clicked (a filter, a tab) isn't carried into the next part or run.
+ */
+async function keep(ctx: BrowserContext, file: string) {
+    type State = Awaited<ReturnType<BrowserContext['storageState']>>;
+    const now = await ctx.storageState();
+    let was: State = { cookies: [], origins: [] };
+    try { was = JSON.parse(readFileSync(file, 'utf8')); } catch { /* none saved yet: only the sign-in entries */ }
+    const origins = [...new Set([...was.origins, ...now.origins].map((o) => o.origin))].map((origin) => {
+        const before = was.origins.find((o) => o.origin === origin)?.localStorage ?? [], after = now.origins.find((o) => o.origin === origin)?.localStorage ?? [];
+        const fresh = new Map(after.map((e) => [e.name, e.value]));
+        const localStorage = before.filter((e) => !SIGN_IN.test(e.name) || fresh.has(e.name)).map((e) => (SIGN_IN.test(e.name) ? { name: e.name, value: fresh.get(e.name)! } : e));
+        for (const e of after) if (SIGN_IN.test(e.name) && !before.some((b) => b.name === e.name)) localStorage.push(e);
+        return { origin, localStorage };
+    }).filter((o) => o.localStorage.length);
+    writeFileSync(file, JSON.stringify({ cookies: now.cookies, origins }, null, 2));
+}
+
 export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = false, more: BrowserContextOptions = {}): Promise<BrowserContext> {
     const record = process.env.RECORD === '1';
     const ctx = await (await launch()).newContext({ ...(auth && r.auth ? { storageState: r.auth } : {}), viewport: { width: vp.width, height: vp.height },
@@ -108,7 +145,7 @@ export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = fal
         // Sessions whose tokens rotate (Supabase, Auth0, Cognito) are good only in their latest copy: keep it for the next
         // context and the next run, unless this one found the session gone.
         const close = ctx.close.bind(ctx);
-        ctx.close = async (...a) => { if (authed.delete(ctx)) await ctx.storageState({ path: r.auth! }).catch(() => {}); return close(...a); };
+        ctx.close = async (...a) => { if (authed.delete(ctx)) await keep(ctx, r.auth!).catch(() => {}); return close(...a); };
     }
     const own = host(r.side.baseUrl);
     // Reached: a request to the app itself that it didn't refuse (401, 403, 405) or not find (404). Page assets aside.
@@ -234,19 +271,38 @@ export async function resolve(r: Run, page: Page, s: Screen): Promise<string | n
     return hit ? hit + (s.suffix ?? '') : null;
 }
 
-/** The screen as up to `max` viewport-sized slices, top to bottom, saved as <run dir>/shots/<key>-<n>.png (Jev takes images 280–1568 px a side). */
+/**
+ * The screen as up to `max` viewport-sized slices, top to bottom, saved as <run dir>/shots/<key>-<n>.png (Jev takes
+ * images 280–1568 px a side). When the document doesn't scroll but a panel in it does (an app shell with its content in
+ * a scrolling main area), the largest such panel is scrolled instead, a panel's height at a time.
+ */
 export async function slices(r: Run, page: Page, key: string, height: number, vh: number, max = 3) {
     mkdirSync(`${r.dir}/shots`, { recursive: true });
-    const n = Math.min(max, Math.max(1, Math.ceil(height / vh)));
+    const panel = height > vh + 1 ? null : await page.evaluate(() => {
+        let best: Element | null = null, area = 0;
+        for (const el of document.querySelectorAll('body *')) {
+            if (el.scrollHeight <= el.clientHeight + 1 || !/(auto|scroll)/.test(getComputedStyle(el).overflowY)) continue;
+            const b = el.getBoundingClientRect(), a = Math.max(0, Math.min(b.right, innerWidth) - Math.max(b.left, 0)) * Math.max(0, Math.min(b.bottom, innerHeight) - Math.max(b.top, 0));
+            if (a > area) { best = el; area = a; }
+        }
+        if (!best || area < innerWidth * innerHeight * 0.25) return null; // a small list, not the screen's content
+        best.setAttribute('data-tapcheck-slices', '');
+        return { total: best.scrollHeight, step: best.clientHeight, at: best.scrollTop };
+    });
+    const total = panel?.total ?? height, step = panel?.step ?? vh;
+    const n = Math.min(max, Math.max(1, Math.ceil(total / step)));
     const out: string[] = [];
     for (let i = 0; i < n; i++) {
-        await page.evaluate((y) => scrollTo(0, y), i * vh);
+        await page.evaluate((y) => { const el = document.querySelector('[data-tapcheck-slices]'); if (el) el.scrollTop = y; else scrollTo(0, y); }, i * step);
         await page.waitForTimeout(250);
         const file = `${r.dir}/shots/${key}-${i + 1}.png`;
         await page.screenshot({ path: file });
         out.push(file);
     }
-    await page.evaluate(() => scrollTo(0, 0));
+    await page.evaluate((at) => {
+        const el = document.querySelector('[data-tapcheck-slices]');
+        if (el) { el.scrollTop = at; el.removeAttribute('data-tapcheck-slices'); } else scrollTo(0, 0);
+    }, panel?.at ?? 0);
     return out;
 }
 
