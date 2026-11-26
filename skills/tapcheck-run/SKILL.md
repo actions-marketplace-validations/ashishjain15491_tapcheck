@@ -32,7 +32,7 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 | everything, a full audit, a release check | `TAPCHECK` |
 | one area: "accessibility", "security", "the admin side" | `ONLY=a11y TAPCHECK`, `ONLY=security TAPCHECK`, `ONLY=admin TAPCHECK` |
 | "do the buttons, dialogs and tables work", "click through everything" | `ONLY=interact TAPCHECK` (brings its side's crawl) |
-| "audit the UI", design consistency, dark mode, tablet and phone layout, design tokens | `ONLY=audit TAPCHECK` (`JEV=off` leaves out Jev's look) |
+| "audit the UI", design consistency, dark mode, tablet and phone layout, design tokens | `ONLY=audit TAPCHECK` (`JEV=off` leaves out Jev's look; an app whose theme is an account setting shows only that account's theme) |
 | several | `ONLY=crawl,a11y TAPCHECK` (part names or tags, comma-separated; `ONLY='flow-*'` matches a name prefix) |
 | everything but something | `SKIP=usability TAPCHECK`; both together: `ONLY=customer SKIP=jev TAPCHECK` |
 | no AI judgment, free, fast | `JEV=off TAPCHECK` (or `ONLY=measured`) |

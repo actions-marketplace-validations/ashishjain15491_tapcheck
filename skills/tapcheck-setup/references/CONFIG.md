@@ -198,7 +198,9 @@ first-time visitor's: the jargon of their field counts as their words. Leave it 
 
 `expect` is for findings that are right for this product. A fail or warn whose `<suite>: <check> @ <where>` (as the
 report shows it, for example `audit: text is not cut off @ Market map · desktop`) matches `match` is recorded as info,
-with `expected: <why> (was fail: …)`, so it no longer fails the run but stays in the report. Keep each rule narrow (one
+with `expected: <why> (was fail: …)`, so it no longer fails the run but stays in the report. When `audit` runs on a
+side, the desktop `visual:` findings are `audit`'s (ux asks those questions only at the other viewports), so match
+`^audit: visual: …` for a desktop screen. Keep each rule narrow (one
 check, on the screens it is right for) and give a reason a reviewer would accept: never use it to hide a real problem,
 such as an accessibility violation, which no product convention excuses. A part that couldn't run can't be expected.
 

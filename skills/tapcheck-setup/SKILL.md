@@ -77,8 +77,11 @@ Read the routes file, the navigation template and the seed data. You need:
   security setting off (forced two-step, captcha) to make `form` work: add `totp`, or use `command`.
   If the app shows its sign-in form at the same address when the session ends (a single-page app, hash routes) rather
   than redirecting, give the side a `signedIn` selector that every signed-in screen has and the sign-in form doesn't
-  (the account menu, the main navigation); check it on each screen at each viewport.
-- **Screens**: the 3 to 8 pages that matter most on each side, each with a `purpose`.
+  (the account menu, the main navigation); check it on each screen at each viewport. If the app takes its theme from an
+  account setting rather than the browser, `audit` sees only the account's theme: say so, and suggest a second test
+  user set to dark if dark mode matters.
+- **Screens**: the 3 to 8 pages that matter most on each side, each with a `purpose` that says what that page shows
+  (open it and check: a wrong purpose makes Jev fail a page that is fine). Two names for one page are one screen.
 - **Tasks**: 1 to 3 things a first-time user comes to do, reachable by clicking alone.
 - **Audience**: who the app is for, in a few words.
 - **Context**, for a specialist product (a trading terminal, a clinical system, a developer console): what kind of

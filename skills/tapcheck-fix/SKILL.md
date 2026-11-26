@@ -26,8 +26,8 @@ to prove it by running the same check again.
    deliberate), that is the user's decision: ask, and say what would then stop being checked.
 2. **Never edit the app's data** to make a finding go away: no changing rows, seeds or fixtures by hand, no deleting
    records, and no `RESET=1` unless the user has agreed. Fix the code that produced the state.
-3. **A Jev warning is not a bug report.** A `warn` from `ux` or `usability` means Jev was unsure. Show the user the
-   screenshot and the question, and let them judge. Don't redesign a screen on an unsure verdict.
+3. **A Jev warning is not a bug report.** A `warn` from `ux` or `usability` means Jev was unsure, or scored the screen
+   just under the pass mark (5.5 to 7). Show the user the screenshot and the question, and let them judge. Don't redesign a screen on an unsure verdict.
 4. **Stop and ask when the fix is a product decision**: changing wording, navigation, layout or visual design beyond
    an obvious defect; changing what an API returns; adding sign-in to a route; choosing a Content-Security-Policy;
    removing a third-party script. Bring the finding, the evidence and one or two options.

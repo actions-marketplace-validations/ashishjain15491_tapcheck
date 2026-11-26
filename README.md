@@ -20,19 +20,23 @@ describes the app; one run writes one report.
 | Suite | Judged by | What it reports |
 |---|---|---|
 | `crawl` | code | 4xx/5xx and slow pages, console errors, broken images and links, unlabelled fields |
-| `contract` | code | failing or slow API calls, unparsable JSON, responses that changed shape |
+| `contract` | code | failing or slow API calls (to the app's host and its subdomains, `api.<domain>` too), unparsable JSON, responses that changed shape |
 | `security` | code | missing headers, weak cookie flags, pages open when signed out, CSRF, leaked secrets |
 | `a11y` | code | axe-core WCAG 2.2 A/AA violations, keyboard focus, page language |
 | `interact` | code | clicks every safe control: errors, controls that do nothing, broken dialogs and tables |
-| `audit` | code and Jev | the UI on desktop, dark mode, tablet and phone; inconsistent components and design tokens |
+| `audit` | code and Jev | the UI on desktop, dark mode, tablet and phone, and each menu and dialog it opens; inconsistent components and design tokens |
 | `code` | code | your own linters and checks (`gates:`) |
 | `flow-<name>` | code | your own journeys (`flows:`), one finding per step |
 | `ux` | Jev | visual QA, design, usability heuristics, a five-second test |
 | `usability` | Jev | a simulated first-time user tries each task |
 
 Each suite runs once per side (`public`, `customer`, `admin`: each kind of person who sees a different app). Jev answers
-with probabilities and code decides: a clear answer passes or fails, an unsure one is a warning. Without a Jev key the
-Jev parts are skipped and everything else runs.
+with probabilities and code decides: a clear answer passes or fails, an unsure one is a warning, and so is a score just
+under the pass mark (5.5 to 7 out of 10). Without a Jev key the Jev parts are skipped and everything else runs.
+
+`MARK=1` puts a marked screenshot first in each failing or warning finding: a banner saying the check, and a numbered
+box and a note on each element at fault. To check a release or a pull request item by item, the `tapcheck-verify` skill
+writes a flow per item, and the report opens with "Release verification": what passed, failed or wasn't tested.
 
 ## Install
 
@@ -111,6 +115,10 @@ sides:
       form: { url: /login, fields: { email: $TAPCHECK_EMAIL, password: $TAPCHECK_PASSWORD } }
 ```
 
+`login: manual` opens a browser for you to sign in once (Google, Discord and the like), and the session is kept in
+`.tapcheck/`. A single-page app that shows its sign-in form in place when the session ends also needs `signedIn`, a
+selector every signed-in page has, so an ended session stops the side instead of auditing the sign-in form.
+
 ### 2. Add the Jev key (optional)
 
 `ux`, `usability` and `audit`'s look at each screen ask Jev, a paid model from [TypeSafe](https://docs.typesafe.ai).
@@ -127,8 +135,8 @@ A run stops asking once it has spent `jev.budget` US dollars (default 1; `JEV_BU
 
 ### 3. Run it
 
-**Plugin:** ask *"Run tapcheck on what I changed"*, or *"Fix the tapcheck failures"* to have it fix your code and
-rerun until each check passes.
+**Plugin:** ask *"Run tapcheck on what I changed"*, *"Fix the tapcheck failures"* to have it fix your code and
+rerun until each check passes, or *"Verify this release"* with the release note or pull request.
 
 **npm:** from the folder with `tapcheck.yml`:
 
@@ -163,7 +171,7 @@ docker run --rm --ipc=host -e TYPESAFE_API_KEY -v "$PWD:/work" -w /work tapcheck
 ```
 
 Options are environment variables (`ONLY`, `SKIP`, `CHANGED`, `PARALLEL=4` for flows at once, `MARK=1` for marked
-screenshots, `LIST=1` to list the parts); the full list is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
+screenshots, `ONLY=verify` for the release flows, `LOGIN=1` to sign in again, `LIST=1` to list the parts); the full list is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
 
 ## Output
 
@@ -182,7 +190,9 @@ holds every request as sent. Run against test data, since screenshots show whate
 ## Safety
 
 - The built-in suites only read, except `interact`, which clicks controls but never one labelled delete, send, pay,
-  sign out and the like, nor a form's submit. Run it against test data.
+  sign out and the like, a theme switch, nor a form's submit. Run it against test data: a filter or toggle it clicks
+  stays changed if the app saves it on the server. The saved session keeps only the sign-in, so what it clicks in the
+  browser isn't carried into later parts.
 - Flows are your own code and may change data; leave them out with `SKIP=flow`.
 - `RESET=1` (`app.reset`) and `interact.submit: true` only run when the app is local.
 - Signed-in sessions are saved under `.tapcheck`; keep it out of git and shared artifacts.
