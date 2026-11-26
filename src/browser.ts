@@ -96,10 +96,20 @@ export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').r
  * coverage map, and with RECORD=1 the context records a video per page (<side dir>/videos/) and a Playwright trace
  * (<side dir>/traces/), written when the context closes.
  */
+/** The contexts that carry the side's session (and still have it). */
+const authed = new WeakSet<BrowserContext>();
+
 export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = false, more: BrowserContextOptions = {}): Promise<BrowserContext> {
     const record = process.env.RECORD === '1';
     const ctx = await (await launch()).newContext({ ...(auth && r.auth ? { storageState: r.auth } : {}), viewport: { width: vp.width, height: vp.height },
         deviceScaleFactor: 1, isMobile: vp.mobile, hasTouch: vp.mobile, bypassCSP, ...(record ? { recordVideo: { dir: `${r.dir}/videos` } } : {}), ...more });
+    if (auth && r.auth) {
+        authed.add(ctx);
+        // Sessions whose tokens rotate (Supabase, Auth0, Cognito) are good only in their latest copy: keep it for the next
+        // context and the next run, unless this one found the session gone.
+        const close = ctx.close.bind(ctx);
+        ctx.close = async (...a) => { if (authed.delete(ctx)) await ctx.storageState({ path: r.auth! }).catch(() => {}); return close(...a); };
+    }
     const own = host(r.side.baseUrl);
     // Reached: a request to the app itself that it didn't refuse (401, 403, 405) or not find (404). Page assets aside.
     ctx.on('response', (res) => {
@@ -160,13 +170,27 @@ export async function settle(page: Page) {
 }
 
 export class SessionExpired extends Error {}
+// LOGIN=1 only does something on a manual side; form and command sides sign in afresh on every run.
+const again = (r: Run) => ('manual' in r.side.login ? 'run again with LOGIN=1' : 'it ended during the run, or this user may not open that page');
 /** Being sent to a sign-in page on a side that signs in means the session is gone: stop rather than audit the login page. */
 export function guard(r: Run, requested: string, landed: string) {
     if ('none' in r.side.login) return;
     if (r.cfg.loginPaths.test(new URL(landed).pathname) && !r.cfg.loginPaths.test(requested.split('?')[0])) {
-        // LOGIN=1 only does something on a manual side; form and command sides sign in afresh on every run.
-        const hint = 'manual' in r.side.login ? 'run again with LOGIN=1' : 'it ended during the run, or this user may not open that page';
-        throw new SessionExpired(`Sent to sign in at ${landed}: the ${r.side.name} session has expired (${hint}).`);
+        throw new SessionExpired(`Sent to sign in at ${landed}: the ${r.side.name} session has expired (${again(r)}).`);
+    }
+}
+/** guard, and on a signed-in page also the side's `signedIn` selector: an app that shows its sign-in form in place, at
+ * the same address (a hash-routed app), sends no one anywhere, so only what is on the page tells. */
+export async function signedIn(r: Run, page: Page, requested: string) {
+    if (!authed.has(page.context())) return guard(r, requested, page.url());
+    try {
+        guard(r, requested, page.url());
+        if (r.side.signedIn && !(await page.locator(r.side.signedIn).first().waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false))) {
+            throw new SessionExpired(`${requested} has no ${r.side.signedIn} on it: the ${r.side.name} session has expired (${again(r)}).`);
+        }
+    } catch (e) {
+        authed.delete(page.context()); // not saved over the last good copy
+        throw e;
     }
 }
 
@@ -196,7 +220,7 @@ export async function open(r: Run, page: Page, path: string) {
         return go();
     });
     await settle(page);
-    guard(r, path, page.url());
+    await signedIn(r, page, path);
     return res;
 }
 
@@ -277,8 +301,11 @@ const MAX_MARKS = 8; // boxes per screenshot; the banner says how many more ther
 let shotNo = 0; // in every marked screenshot's name: a slug is cut at 48 characters, so two could share one
 
 type Drawn = { box?: { x: number; y: number; width: number; height: number }; note?: string; attr?: string; colour: string };
-/** Runs in the page: the banner, then a box, a numbered marker and a note per target, in a layer above everything. */
-function draw({ title, detail, colour, marks, max }: { title: string; detail: string; colour: string; marks: Drawn[]; max: number }) {
+/**
+ * Runs in the page: a box, a numbered marker and a note per target, in a layer above everything. Markers and notes go
+ * where they cover no other marker or note (and, if they can, no other target). Returns how many targets weren't drawn.
+ */
+function draw({ marks, max }: { marks: Drawn[]; max: number }) {
     const vw = innerWidth, vh = innerHeight;
     const root = document.createElement('div');
     root.id = 'tapcheck-marks';
@@ -292,37 +319,69 @@ function draw({ title, detail, colour, marks, max }: { title: string; detail: st
         return { x: b.left, y: b.top, width: b.width, height: b.height, note: m.note ?? (m.attr && el.getAttribute(m.attr)) ?? '' };
     })).map((b) => ({ ...b, colour: m.colour })));
     const shown = all.filter((b) => b.width > 0 && b.height > 0 && b.x < vw && b.y < vh && b.x + b.width > 0 && b.y + b.height > 0).slice(0, max);
-    const more = all.length - shown.length; // past the cap, or not on this screen
-    // The banner goes across the top, or across the bottom when a target is up there.
-    const bar = add(`left:0;right:0;${shown.some((b) => b.y < 72) ? 'bottom' : 'top'}:0;padding:10px 16px;background:${colour};font-size:18px`, title + (more ? ` (+${more} more)` : ''));
-    if (detail) { const d = document.createElement('div'); d.style.cssText = 'font:400 14px/1.35 system-ui,sans-serif;margin-top:2px'; d.textContent = detail; bar.append(d); }
+    type Rect = { x: number; y: number; w: number; h: number };
+    const labels: Rect[] = [];
+    const boxes: Rect[] = shown.map((b) => ({ x: b.x - 3, y: b.y - 3, w: b.width + 6, h: b.height + 6 }));
+    const hits = (a: Rect, b: Rect) => a.x < b.x + b.w + 2 && b.x < a.x + a.w + 2 && a.y < b.y + b.h + 2 && b.y < a.y + a.h + 2;
     const inside = (v: number, size: number, limit: number) => Math.max(2, Math.min(v, limit - size - 2));
-    for (const [i, b] of shown.entries()) {
+    // The nearest clear spot: the wanted ones, then each moved down or up a step at a time; one clear of the other labels
+    // and the other targets, else of the other labels. A marker would rather cover a target than leave its box.
+    const place = (w: number, h: number, want: [number, number][], own: number, marker = false) => {
+        const steps = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6], others = boxes.filter((_, i) => i !== own);
+        const spots = steps.flatMap((k) => want.map(([x, y]) => ({ x: inside(x, w, vw), y: inside(y + k * (h + 3), h, vh), w, h, k }))).filter((s) => !labels.some((l) => hits(s, l)));
+        const clear = (s: Rect) => !others.some((b) => hits(s, b)), near = spots.filter((s) => s.k === 0);
+        const spot = near.find(clear) ?? (marker ? near[0] : undefined) ?? spots.find(clear) ?? spots[0]
+            ?? { x: inside(want[0][0], w, vw), y: inside(want[0][1], h, vh), w, h };
+        labels.push(spot);
+        return spot;
+    };
+    for (const b of shown) {
         const l = Math.max(0, b.x - 3), t = Math.max(0, b.y - 3); // 3 px around the element, cut at the window's edge
         add(`left:${l}px;top:${t}px;width:${Math.min(vw, b.x + b.width + 3) - l}px;height:${Math.min(vh, b.y + b.height + 3) - t}px;border:3px solid ${b.colour};border-radius:4px`, '');
-        add(`left:${inside(b.x - 14, 24, vw)}px;top:${inside(b.y - 14, 24, vh)}px;width:24px;height:24px;border-radius:50%;background:${b.colour};border:2px solid #fff;display:grid;place-items:center;font-size:12px`, String(i + 1));
-        if (!b.note) continue;
-        // The note: right of the box, else left of it, else (a row as wide as the window) at its right end, else under
-        // it, else above it; then pushed back inside the window.
-        // ponytail: two notes may still land on each other; stagger them if screens with many close targets need it.
-        const n = add(`max-width:300px;padding:3px 8px;border-radius:3px;background:${b.colour}`, `${i + 1} ${b.note.slice(0, 90)}`);
-        const s = n.getBoundingClientRect();
-        const side = b.x + b.width + 8 + s.width <= vw ? b.x + b.width + 8 : b.x - 8 - s.width >= 0 ? b.x - 8 - s.width : b.width > 2 * s.width ? b.x + b.width - s.width - 6 : null;
-        const y = side !== null ? b.y : b.y + b.height + 6 + s.height <= vh ? b.y + b.height + 6 : b.y - 6 - s.height;
-        n.style.left = `${inside(side ?? b.x, s.width, vw)}px`;
-        n.style.top = `${inside(y, s.height, vh)}px`;
     }
+    // Every marker first, so each gets a spot by its box: on its top left corner, else another corner, else beside it.
+    for (const [i, b] of shown.entries()) {
+        const mid = b.y + b.height / 2 - 12;
+        const m = place(24, 24, [[b.x - 14, b.y - 14], [b.x + b.width - 10, b.y - 14], [b.x - 14, b.y + b.height - 10], [b.x + b.width - 10, b.y + b.height - 10], [b.x - 28, mid], [b.x + b.width + 4, mid]], i, true);
+        add(`left:${m.x}px;top:${m.y}px;width:24px;height:24px;border-radius:50%;background:${b.colour};border:2px solid #fff;display:grid;place-items:center;font-size:12px`, String(i + 1));
+    }
+    for (const [i, b] of shown.entries()) {
+        if (!b.note) continue;
+        // The note: right of the box (or of a marker beside it), left of it, at the right end inside it (a row as wide as the
+        // window), under it or above it.
+        const n = add(`max-width:300px;padding:3px 8px;border-radius:3px;background:${b.colour};border:1px solid #fff`, `${i + 1} ${b.note.slice(0, 90)}`);
+        const s = n.getBoundingClientRect();
+        const at = place(s.width, s.height, [[b.x + b.width + 8, b.y], [b.x + b.width + 32, b.y], [b.x - 8 - s.width, b.y], [b.x - 32 - s.width, b.y], [b.x + b.width - s.width - 6, b.y], [b.x, b.y + b.height + 6], [b.x, b.y - 6 - s.height]]
+            .filter(([x], k) => k > 4 || (x >= 0 && x + s.width <= vw && (k < 4 || b.width > 2 * s.width))) as [number, number][], i);
+        n.style.left = `${at.x}px`;
+        n.style.top = `${at.y}px`;
+    }
+    return all.length - shown.length; // past the cap, or not on this screen
+}
+
+let blank: Page | undefined; // where a screenshot gets its banner: a page of its own, so the app's own page is never covered
+/** `png` with a banner above it, in the status's colour, saying the check and its detail; written to `file`. */
+async function frame(png: Buffer, file: string, banner: { status: Finding['status']; title: string; detail?: string }, more = 0) {
+    if (!blank || blank.isClosed()) blank = await (await (await launch()).newContext({ deviceScaleFactor: 1 })).newPage();
+    const esc = (t: string) => t.replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`);
+    const title = `${banner.status.toUpperCase()}: ${banner.title}`.slice(0, 160) + (more ? ` (+${more} more)` : '');
+    const detail = (banner.detail ?? '').slice(0, 260);
+    await blank.setContent(`<body style="margin:0;background:#fff"><div id="tapcheck-banner" style="padding:10px 16px;background:${COLOUR[KIND[banner.status]]};color:#fff;font:600 18px/1.3 system-ui,sans-serif">${esc(title)}${detail ? `<div style="font:400 14px/1.35 system-ui,sans-serif;margin-top:2px">${esc(detail)}</div>` : ''}</div><img style="display:block" src="data:image/png;base64,${png.toString('base64')}">`);
+    const width = await blank.evaluate(async () => { const i = document.images[0]; await i.decode(); return i.naturalWidth; });
+    await blank.setViewportSize({ width, height: 200 });
+    await blank.screenshot({ path: file, fullPage: true });
 }
 
 /**
- * A marked screenshot, <run dir>/shots/marked-<n>-<name>.png: the page as it is, with a banner in the status's colour
- * (red fail, amber warn, green pass, blue info) saying the check and its detail, and a box, a numbered marker and a note
- * on each target (at most 8; the banner counts the rest). The first target is scrolled into view. The overlay is drawn
+ * A marked screenshot, <run dir>/shots/marked-<n>-<name>.png: the page as it is with a box, a numbered marker and a note
+ * on each target (at most 8; the banner counts the rest), under a banner in the status's colour (red fail, amber warn,
+ * green pass, blue info) saying the check and its detail. The first target is scrolled into view. The overlay is drawn
  * in the page and taken out again, with the scroll position put back. Undefined when it couldn't be taken: a marked
  * screenshot is an extra, and never fails the check it shows.
  */
-export async function marked(r: Run, page: Page, name: string, banner: { status: Finding['status']; title: string; detail?: string }, marks: Mark[] = []): Promise<string | undefined> {
-    const file = `${r.dir}/shots/marked-${String(++shotNo).padStart(3, '0')}-${slug(name)}.png`;
+const name = (r: Run, label: string) => `${r.dir}/shots/marked-${String(++shotNo).padStart(3, '0')}-${slug(label)}.png`;
+export async function marked(r: Run, page: Page, label: string, banner: { status: Finding['status']; title: string; detail?: string }, marks: Mark[] = []): Promise<string | undefined> {
+    const file = name(r, label);
     let at: number[] | undefined;
     try {
         mkdirSync(`${r.dir}/shots`, { recursive: true });
@@ -344,8 +403,9 @@ export async function marked(r: Run, page: Page, name: string, banner: { status:
             }
             return at;
         }, marks.length);
-        await page.evaluate(draw, { title: `${banner.status.toUpperCase()}: ${banner.title}`.slice(0, 160), detail: (banner.detail ?? '').slice(0, 260), colour: COLOUR[KIND[banner.status]], marks: list, max: MAX_MARKS });
-        await page.screenshot({ path: file });
+        const more = await page.evaluate(draw, { marks: list, max: MAX_MARKS });
+        const png = await page.screenshot();
+        await frame(png, file, banner, more);
         return file;
     } catch {
         return undefined;
@@ -364,20 +424,12 @@ export async function marked(r: Run, page: Page, name: string, banner: { status:
  * box is drawn.
  */
 export async function banners(r: Run, list: Finding[]) {
-    const todo = list.filter((f) => (f.status === 'fail' || f.status === 'warn') && /\.png$/.test(f.evidence?.[0] ?? '') && !f.evidence![0].includes('/shots/marked-'));
-    if (!todo.length) return;
-    const ctx = await (await launch()).newContext({ deviceScaleFactor: 1 });
-    try {
-        const page = await ctx.newPage();
-        for (const f of todo) {
-            try {
-                await page.setContent(`<body style="margin:0"><img style="display:block" src="data:image/png;base64,${readFileSync(f.evidence![0]).toString('base64')}">`);
-                await page.setViewportSize(await page.evaluate(async () => { const i = document.images[0]; await i.decode(); return { width: i.naturalWidth, height: i.naturalHeight }; }));
-                const shot = await marked(r, page, `${f.suite} ${f.where} ${f.check}`, { status: f.status, title: f.check, detail: [f.where, f.detail].filter(Boolean).join(' · ') });
-                if (shot) f.evidence = [shot, ...f.evidence!]; // a new list: findings of one look share theirs
-            } catch { /* the screenshot is gone or isn't one: the finding stands without a banner */ }
-        }
-    } finally {
-        await ctx.close().catch(() => {});
+    for (const f of list.filter((f) => (f.status === 'fail' || f.status === 'warn') && /\.png$/.test(f.evidence?.[0] ?? '') && !f.evidence![0].includes('/shots/marked-'))) {
+        const file = name(r, `${f.suite} ${f.where} ${f.check}`);
+        try {
+            mkdirSync(`${r.dir}/shots`, { recursive: true });
+            await frame(readFileSync(f.evidence![0]), file, { status: f.status, title: f.check, detail: [f.where, f.detail].filter(Boolean).join(' · ') });
+            f.evidence = [file, ...f.evidence!]; // a new list: findings of one look share theirs
+        } catch { /* the screenshot is gone or isn't one: the finding stands without a banner */ }
     }
 }

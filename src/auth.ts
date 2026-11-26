@@ -66,6 +66,7 @@ export async function signIn(cfg: Config, side: Side): Promise<string | undefine
         await page.goto(at(l.manual));
         console.log(`Sign in as ${side.name} in the browser window. Waiting up to 10 minutes…`);
         await page.waitForURL((u) => off(cfg, side, u.href), { timeout: 600_000 });
+        if (side.signedIn) await page.locator(side.signedIn).first().waitFor({ state: 'attached', timeout: 600_000 });
         await page.waitForLoadState('networkidle').catch(() => {});
         await ctx.storageState({ path: file });
         await browser.close();

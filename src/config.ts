@@ -29,7 +29,8 @@ export const DNS_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'CNAME', 'NS'] as const;
 export type DnsRecord = { name: string; type: (typeof DNS_TYPES)[number]; values: string[] };
 export type Csrf = { method: string; path: string; expect: number };
 /** `csrf`: this side's own CSRF probe, in place of security.csrf (another host often has other routes). */
-export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[]; csrf?: Csrf };
+export type Side = { name: string; baseUrl: string; login: Login; screens: Screen[]; tasks: Task[]; csrf?: Csrf;
+    signedIn?: string }; // a selector on every signed-in page and not on the sign-in form (the account menu): its absence means signed out
 export type Config = {
     root: string; // the config file's folder: gates, the routes command, flows and stub files are relative to it
     baseUrl: string;
@@ -267,12 +268,12 @@ export function check(raw: any, root = process.cwd()): Config {
     const byside = (key: 'screens' | 'tasks', side: string) => (Array.isArray(raw[key]) ? raw[key] : raw[key]?.[side]);
     const at = (key: 'screens' | 'tasks', side: string) => (Array.isArray(raw[key]) ? key : `${key}.${side}`);
     const sideDefs: Record<string, any> = raw.sides ?? { public: {} };
-    if (typeof sideDefs !== 'object' || Array.isArray(sideDefs) || !Object.keys(sideDefs).length) fail('sides', 'must map each side name to {login, baseUrl?, csrf?}');
+    if (typeof sideDefs !== 'object' || Array.isArray(sideDefs) || !Object.keys(sideDefs).length) fail('sides', 'must map each side name to {login, baseUrl?, csrf?, signedIn?}');
     const sides = Object.entries(sideDefs).map(([name, s]): Side => {
         if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`sides.${name}`, 'name must be lowercase letters, digits and dashes');
         // Side names are tags too (ONLY=<side>), so they can't reuse a suite or kind tag.
         if ([...CHANGE_KEYS, 'jev', 'measured', 'verify'].includes(name)) fail(`sides.${name}`, `name can't be a suite or tag name (${[...CHANGE_KEYS, 'jev', 'measured', 'verify'].join(', ')})`);
-        return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`), csrf: csrfOf(s?.csrf, `sides.${name}.csrf`),
+        return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`), csrf: csrfOf(s?.csrf, `sides.${name}.csrf`), signedIn: str(s?.signedIn, `sides.${name}.signedIn`, true),
             screens: screens(byside('screens', name), at('screens', name)), tasks: tasks(byside('tasks', name), at('tasks', name)) };
     });
     for (const key of ['screens', 'tasks'] as const) {

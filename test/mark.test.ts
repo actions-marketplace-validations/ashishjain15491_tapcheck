@@ -45,19 +45,25 @@ function run(extra: object = {}, more: Partial<Run> = {}) {
     return { cfg, r, found, at };
 }
 
-/** The overlay as it is when the screenshot is taken: every piece's text, colour and place. */
+/** The overlay as it is when the screenshot is taken (every piece's text, colour and place), and the banner put above it. */
 function spy(page: Page) {
-    const seen: { scrollY: number; vw: number; vh: number; parts: { text: string; bg: string; border: string; x: number; y: number; right: number; bottom: number }[] }[] = [];
-    const shoot = page.screenshot.bind(page);
-    page.screenshot = async (o) => {
-        seen.push(await page.evaluate(() => ({ scrollY, vw: innerWidth, vh: innerHeight, parts: [...document.querySelectorAll<HTMLElement>('#tapcheck-marks > div')].map((d) => {
+    const seen: { scrollY: number; vw: number; vh: number; banner: { text: string; bg: string; height: number }; parts: { text: string; bg: string; border: string; x: number; y: number; right: number; bottom: number }[] }[] = [];
+    const proto = Object.getPrototypeOf(page), shoot = proto.screenshot;
+    proto.screenshot = async function (this: Page, o: object) {
+        const banner = await this.evaluate(() => { const b = document.getElementById('tapcheck-banner'); return b && { text: b.innerText, bg: b.style.backgroundColor, height: b.getBoundingClientRect().height }; });
+        if (banner) { if (seen.length) seen[seen.length - 1].banner = banner; }
+        else seen.push(await this.evaluate(() => ({ scrollY, vw: innerWidth, vh: innerHeight, banner: { text: '', bg: '', height: 0 }, parts: [...document.querySelectorAll<HTMLElement>('#tapcheck-marks > div')].map((d) => {
             const b = d.getBoundingClientRect();
             return { text: d.innerText, bg: d.style.backgroundColor, border: d.style.borderColor, x: b.left, y: b.top, right: b.right, bottom: b.bottom };
         }) })));
-        return shoot(o);
+        return shoot.call(this, o);
     };
+    after(() => { proto.screenshot = shoot; });
     return seen;
 }
+
+/** A PNG's width and height. */
+const size = (file: string) => { const b = readFileSync(file); return [b.readUInt32BE(16), b.readUInt32BE(20)]; };
 
 test('marked: a banner, a box, a marker and a note per target, at most eight, drawn and taken out again', async () => {
     const { cfg, r } = run();
@@ -73,23 +79,36 @@ test('marked: a banner, a box, a marker and a note per target, at most eight, dr
     const [shot] = seen, RED = 'rgb(220, 38, 38)', BLUE = 'rgb(37, 99, 235)', AMBER = 'rgb(180, 83, 9)';
     assert.ok(shot.scrollY > 0, 'the first target is below the first screen: it is scrolled into view');
     const boxes = shot.parts.filter((p) => !p.text), notes = shot.parts.filter((p) => /^\d+ \D/.test(p.text)), dots = shot.parts.filter((p) => /^\d+$/.test(p.text));
-    // Twelve targets (ten lines, the total, the plain box): eight are drawn, the banner counts the rest.
-    assert.equal(shot.parts[0].text, 'FAIL: the cart total equals the sum of the lines (+4 more)\nexpected 30.00, shown 33.00');
-    assert.equal(shot.parts[0].bg, RED);
-    assert.equal(shot.parts[0].y, 0, 'no target is at the top, so the banner is');
+    // Twelve targets (ten lines, the total, the plain box): eight are drawn, the banner counts the rest. It goes above the
+    // screenshot, so it covers none of the page.
+    assert.equal(shot.banner.text, 'FAIL: the cart total equals the sum of the lines (+4 more)\nexpected 30.00, shown 33.00');
+    assert.equal(shot.banner.bg, RED);
+    assert.deepEqual(size(file!), [shot.vw, shot.vh + Math.round(shot.banner.height)]);
+    // No marker or note covers another, though the ten lines are close together.
+    const labels = [...dots, ...notes];
+    for (const a of labels) for (const b of labels) assert.ok(a === b || a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y, `${a.text} and ${b.text} overlap`);
     assert.deepEqual([boxes.length, dots.length, notes.length], [8, 8, 8]);
     assert.deepEqual(dots.map((d) => d.text), ['1', '2', '3', '4', '5', '6', '7', '8']);
     assert.deepEqual(notes.map((n) => n.text), Array.from({ length: 8 }, (_, i) => `${i + 1} a line`));
     assert.ok(boxes.every((b) => b.border === RED), 'a mark without a kind takes the status\'s colour');
-    for (const p of shot.parts.slice(1)) assert.ok(p.x >= 0 && p.y >= 0 && p.right <= shot.vw && p.bottom <= shot.vh, `inside the window: ${JSON.stringify(p)}`);
+    for (const p of shot.parts) assert.ok(p.x >= 0 && p.y >= 0 && p.right <= shot.vw && p.bottom <= shot.vh, `inside the window: ${JSON.stringify(p)}`);
 
     // Nothing is left on the page, and it is where it was.
     assert.deepEqual(await page.evaluate(() => [document.querySelectorAll('#tapcheck-marks, [data-tapcheck-m0], [data-tapcheck-m1]').length, scrollY]), [0, 0]);
 
-    // A mark's own kind colours it; a target at the top of the screen sends the banner to the bottom; a selector that matches nothing is no box.
+    // A mark's own kind colours it; a selector that matches nothing is no box.
     await marked(r, page, 'kinds', { status: 'pass', title: 'kinds' }, [{ target: 'h1', note: 'the heading', kind: 'setting' }, { target: { x: 10, y: 300, width: 50, height: 20 }, note: 'ask', kind: 'question' }, { target: '.gone' }]);
-    assert.equal(seen[1].parts[0].text, 'PASS: kinds');
-    assert.ok(seen[1].parts[0].bottom >= seen[1].vh - 1 && seen[1].parts[0].y > 300);
+    assert.equal(seen[1].banner.text, 'PASS: kinds');
+
+    // Small targets close together, as the icons in a table's rows: no marker or note covers another, or another target.
+    const tight = [0, 1, 2].flatMap((row) => [0, 1].map((col) => ({ x: 200 + col * 20, y: 200 + row * 30, width: 14, height: 14 })));
+    await marked(r, page, 'tight', { status: 'fail', title: 'targets at least 24 px' }, tight.map((b) => ({ target: b, note: `${b.width}×${b.height} px` })));
+    const drawn = seen[2].parts.filter((p) => p.text);
+    assert.equal(drawn.length, 12);
+    for (const a of drawn) {
+        for (const b of drawn) assert.ok(a === b || a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y, `${a.text} and ${b.text} overlap`);
+        if (/ /.test(a.text)) for (const t of tight) assert.ok(a.right <= t.x || t.x + t.width <= a.x || a.bottom <= t.y || t.y + t.height <= a.y, `note ${a.text} covers a target`);
+    }
     assert.deepEqual(seen[1].parts.filter((p) => !p.text).map((p) => p.border), [BLUE, AMBER]);
     await ctx.close();
 });

@@ -39,7 +39,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BrowserContext, Page } from 'playwright';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { abs, context, guard, host, marked, reach, REFUSED, settle, slices, slug, watch, type Mark, type Run } from './browser.ts';
+import { abs, context, host, marked, reach, signedIn, REFUSED, settle, slices, slug, watch, type Mark, type Run } from './browser.ts';
 import { isLocal, type Config } from './config.ts';
 import * as jev from './jev.ts';
 import { EMAIL, VISUAL, YES_IS_DEFECT } from './questions.ts';
@@ -171,7 +171,7 @@ export class T {
         const url = abs(this.r, path);
         await page.goto(url, { waitUntil: 'domcontentloaded' });
         await settle(page);
-        if (opts.guard !== false && !this.signedOut.has(page.context())) guard(this.r, new URL(url).pathname, page.url());
+        if (opts.guard !== false && !this.signedOut.has(page.context())) await signedIn(this.r, page, new URL(url).pathname);
         return page;
     }
 

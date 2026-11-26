@@ -7,15 +7,19 @@
   a new hash as another screen.
 - **Sign-in through Google, Discord and the like.** `login: manual` waits until the browser is back on the app's own
   site, so a provider's consent page no longer counts as signed in.
+- **Sessions that end without a redirect.** `sides.<name>.signedIn` is a selector on every signed-in page; a page
+  without it stops the side as "session expired", for apps that show their sign-in form at the same address. The saved
+  session is written again as each part ends, so sign-ins whose tokens change on every refresh stay good across parts
+  and runs.
 - **interact** never clicks a dark mode, light mode or theme control, which would change the account's settings.
 - **context and expect.** `context:` says what kind of product it is (a dense trading tool, a clinical system) and goes
   to Jev with every question, so screens are judged against what its users expect. `expect:` lists findings that are
   right for the product, as `{ match, why }` on `<suite>: <check> @ <where>`: a matching fail or warn is recorded as
   info with the reason, so it stays in the report without failing the run.
 - **Marked screenshots.** `MARK=1` (or `marks: true`) puts a marked screenshot first in a failing or warning finding's
-  evidence: the screen as it was measured, a banner saying the check, and a box, a number and a note on each element.
-  `audit`, `a11y`, `crawl` and `interact` mark the elements they found; what Jev judged, and a failed flow step, get
-  the banner alone. Off by default, and nothing changes without it.
+  evidence: the screen as it was measured, a banner above it saying the check, and a box, a number and a note on each
+  element, placed so that none covers another. `audit`, `a11y`, `crawl` and `interact` mark the elements they found;
+  what Jev judged, and a failed flow step, get the banner alone. Off by default, and nothing changes without it.
 - **t.mark.** `t.mark(check, status, marks, detail?)` records a finding a flow decided, with a marked screenshot of
   the current page: red for a bug, green for a pass, blue for a setting, amber for a question. It needs no Jev.
 - **Verify a release or a pull request.** The new `tapcheck-verify` skill splits a release note, a pull request or a

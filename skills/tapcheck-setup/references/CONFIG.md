@@ -37,6 +37,7 @@ sides:                              # default: { public: {} }. Names: lowercase 
     baseUrl: http://app.localhost:8000   # optional, when this side lives at another address
     login: …                        # one of the kinds below; leaving it out means none
     csrf: { method: PATCH, path: /admin/users/0, expect: 419 }   # optional: this side's CSRF probe, in place of security.csrf
+    signedIn: "[aria-label='Account']"   # optional: on every signed-in page, not on the sign-in form (see below)
 
 screens: […]                        # a list for every side, or { <side>: [...] }
 tasks: […]                          # same
@@ -109,6 +110,12 @@ login: { command: ./bin/tapcheck-session admin }   # any program printing a Play
 
 `form` and `command` sign in on every run; `manual` can't run unattended (CI). Sign-in counts as done when the
 browser leaves every path matching `loginPaths`.
+
+A run stops a side with "the session has expired" when a signed-in page sends it to a `loginPaths` path. An app that
+shows its sign-in form in place, at the same address (common with hash routes), sends it nowhere: give that side
+`signedIn`, a selector on every signed-in page and not on the sign-in form (the account menu, say). A page without it
+ends the side the same way, and a manual sign-in waits for it too. The session is saved again as each part ends, so
+sign-ins whose tokens change on every refresh (Supabase, Auth0, Cognito) stay good for the next part and the next run.
 
 ## screens
 
@@ -368,9 +375,10 @@ or a range of commits.
 
 Off by default. With `marks: true`, or `MARK=1` for one run (`MARK=0` turns it off for one), a failing or warning
 finding's evidence opens with a marked screenshot, `<side>/shots/marked-<n>-<name>.png`: the screen as it was when
-the check measured it (a menu still open, that viewport), a banner across it in the status's colour (red fail, amber
+the check measured it (a menu still open, that viewport), a banner above it in the status's colour (red fail, amber
 warning, green pass, blue info) saying the check and its detail, and a box, a numbered marker and a short note on
-each element the check found, eight at most (`+N more` in the banner).
+each element the check found, eight at most (`+N more` in the banner). The banner covers none of the screen, and
+markers and notes are placed so they cover no other marker or note, and no other element if there is room.
 
 | Part | What is boxed |
 |---|---|

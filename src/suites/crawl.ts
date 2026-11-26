@@ -9,7 +9,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import type { Page, Request, Response } from 'playwright';
-import { abs, context, facts, guard, here, host, load, marked, watch, type Hit, type Run } from '../browser.ts';
+import { abs, context, facts, here, host, load, marked, signedIn, watch, type Hit, type Run } from '../browser.ts';
 import { coverage, hasParams, routes } from '../routes.ts';
 
 const SLOW_MS = 3000;
@@ -72,7 +72,7 @@ export async function run(r: Run) {
             const st = res?.status() ?? 0;
             // A route from the list that isn't this side's (refused, sent to sign in) or isn't a page (a download): not a finding.
             if (route && (st === 0 || [401, 403, 404, 405].includes(st) || (r.cfg.loginPaths.test(finalPath) && !r.cfg.loginPaths.test(path)))) continue;
-            guard(r, path, page.url());
+            await signedIn(r, page, path);
             const f = await facts(page).catch(() => null);
             const links = [...new Set((f?.controls ?? []).map((c) => c.href).filter((h): h is string => !!h && host(h) === own)
                 .map((h) => { const u = new URL(h); return u.pathname + u.search + (/^#!?\//.test(u.hash) ? u.hash : ''); }))]; // #/orders is a route, #section a place on the page

@@ -55,7 +55,8 @@
                 "properties": {
                     "baseUrl": { "description": "This side's own address, when it differs from the top-level baseUrl.", "type": "string", "pattern": "^(https?://[^/]+|.*\\$\\{?[A-Z_])" },
                     "login": { "$ref": "#/definitions/login" },
-                    "csrf": { "$ref": "#/definitions/csrf", "description": "This side's own CSRF probe, in place of security.csrf (another host often has other routes)." }
+                    "csrf": { "$ref": "#/definitions/csrf", "description": "This side's own CSRF probe, in place of security.csrf (another host often has other routes)." },
+                    "signedIn": { "description": "A CSS selector on every signed-in page and not on the sign-in form (the account menu). A page without it means the session has ended, for apps that show their sign-in form at the same address.", "type": "string" }
                 }
             }
         },
