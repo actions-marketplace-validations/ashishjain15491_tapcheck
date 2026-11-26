@@ -1,9 +1,10 @@
 /*
  * The browser side every suite shares: one Chromium, a context per viewport (signed in with the side's saved session, or
- * not), page settling, the facts code can measure on a page, screenshot slices, and the Run each suite is handed.
+ * not), page settling, the facts code can measure on a page, screenshot slices, marked screenshots, and the Run each
+ * suite is handed.
  */
-import { mkdirSync } from 'node:fs';
-import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from 'playwright';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Locator, type Page } from 'playwright';
 import type { Config, Screen, Side } from './config.ts';
 import type { Finding } from './report.ts';
 
@@ -19,6 +20,7 @@ export type Run = {
     step?: string;
     reached?: Reach[]; // what the run touched, for hits.json and the coverage map (src/coverage.ts)
     prefix?: string; // printed before each of a flow's step lines when flows run in parallel: "[flow-checkout] "
+    scoped?: boolean; // ONLY or CHANGED chose the parts: a pass from t.mark gets its marked screenshot too
 };
 /** One thing a part touched: "GET /orders", "dialog <name>", "table <headers>: sort". */
 export type Reach = { part: string; step?: string; what: string };
@@ -234,7 +236,8 @@ export async function facts(page: Page) {
             const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
             return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0 && !el.closest('[aria-hidden=true]');
         };
-        const broken = [...document.images].filter((i) => visible(i) && i.complete && i.naturalWidth === 0).map((i) => i.currentSrc || i.src);
+        // Tagged for a marked screenshot (MARK=1), as the other measured elements are.
+        const broken = [...document.images].filter((i) => visible(i) && i.complete && i.naturalWidth === 0).map((i) => { i.setAttribute('data-tapcheck-mark-broken', 'does not load'); return i.currentSrc || i.src; });
         const controls = [...document.querySelectorAll('a[href], button, [role=button], input:not([type=hidden]), select, textarea, summary')]
             .filter(visible).slice(0, 250).map((el) => {
                 const r = el.getBoundingClientRect();
@@ -263,4 +266,118 @@ export async function facts(page: Page) {
             h1: document.querySelectorAll('h1').length,
         };
     });
+}
+
+export type MarkKind = 'bug' | 'pass' | 'setting' | 'question';
+/** One thing a marked screenshot points at: a selector or a Playwright locator (each element it matches gets a box), or a plain box in viewport pixels. */
+export type Mark = { target: string | Locator | { x: number; y: number; width: number; height: number }; note?: string; kind?: MarkKind };
+const KIND = { fail: 'bug', warn: 'question', info: 'setting', pass: 'pass' } as const;
+const COLOUR: Record<MarkKind, string> = { bug: '#dc2626', pass: '#15803d', setting: '#2563eb', question: '#b45309' };
+const MAX_MARKS = 8; // boxes per screenshot; the banner says how many more there are
+let shotNo = 0; // in every marked screenshot's name: a slug is cut at 48 characters, so two could share one
+
+type Drawn = { box?: { x: number; y: number; width: number; height: number }; note?: string; attr?: string; colour: string };
+/** Runs in the page: the banner, then a box, a numbered marker and a note per target, in a layer above everything. */
+function draw({ title, detail, colour, marks, max }: { title: string; detail: string; colour: string; marks: Drawn[]; max: number }) {
+    const vw = innerWidth, vh = innerHeight;
+    const root = document.createElement('div');
+    root.id = 'tapcheck-marks';
+    root.style.cssText = 'position:fixed;inset:0;width:auto;height:auto;margin:0;border:0;padding:0;background:none;overflow:hidden;z-index:2147483647;pointer-events:none;font:600 13px/1.3 system-ui,sans-serif;color:#fff;text-align:left';
+    document.documentElement.append(root);
+    // The top layer, or an open modal dialog would cover the marks; where there is no popover the z-index has to do.
+    try { root.popover = 'manual'; root.showPopover(); } catch { root.removeAttribute('popover'); }
+    const add = (css: string, text: string) => { const d = document.createElement('div'); d.style.cssText = `position:absolute;box-sizing:border-box;${css}`; d.textContent = text; root.append(d); return d; };
+    const all = marks.flatMap((m, i) => (m.box ? [{ ...m.box, note: m.note ?? '' }] : [...document.querySelectorAll(`[data-tapcheck-m${i}]`)].map((el) => {
+        const b = el.getBoundingClientRect();
+        return { x: b.left, y: b.top, width: b.width, height: b.height, note: m.note ?? (m.attr && el.getAttribute(m.attr)) ?? '' };
+    })).map((b) => ({ ...b, colour: m.colour })));
+    const shown = all.filter((b) => b.width > 0 && b.height > 0 && b.x < vw && b.y < vh && b.x + b.width > 0 && b.y + b.height > 0).slice(0, max);
+    const more = all.length - shown.length; // past the cap, or not on this screen
+    // The banner goes across the top, or across the bottom when a target is up there.
+    const bar = add(`left:0;right:0;${shown.some((b) => b.y < 72) ? 'bottom' : 'top'}:0;padding:10px 16px;background:${colour};font-size:18px`, title + (more ? ` (+${more} more)` : ''));
+    if (detail) { const d = document.createElement('div'); d.style.cssText = 'font:400 14px/1.35 system-ui,sans-serif;margin-top:2px'; d.textContent = detail; bar.append(d); }
+    const inside = (v: number, size: number, limit: number) => Math.max(2, Math.min(v, limit - size - 2));
+    for (const [i, b] of shown.entries()) {
+        const l = Math.max(0, b.x - 3), t = Math.max(0, b.y - 3); // 3 px around the element, cut at the window's edge
+        add(`left:${l}px;top:${t}px;width:${Math.min(vw, b.x + b.width + 3) - l}px;height:${Math.min(vh, b.y + b.height + 3) - t}px;border:3px solid ${b.colour};border-radius:4px`, '');
+        add(`left:${inside(b.x - 14, 24, vw)}px;top:${inside(b.y - 14, 24, vh)}px;width:24px;height:24px;border-radius:50%;background:${b.colour};border:2px solid #fff;display:grid;place-items:center;font-size:12px`, String(i + 1));
+        if (!b.note) continue;
+        // The note: right of the box, else left of it, else (a row as wide as the window) at its right end, else under
+        // it, else above it; then pushed back inside the window.
+        // ponytail: two notes may still land on each other; stagger them if screens with many close targets need it.
+        const n = add(`max-width:300px;padding:3px 8px;border-radius:3px;background:${b.colour}`, `${i + 1} ${b.note.slice(0, 90)}`);
+        const s = n.getBoundingClientRect();
+        const side = b.x + b.width + 8 + s.width <= vw ? b.x + b.width + 8 : b.x - 8 - s.width >= 0 ? b.x - 8 - s.width : b.width > 2 * s.width ? b.x + b.width - s.width - 6 : null;
+        const y = side !== null ? b.y : b.y + b.height + 6 + s.height <= vh ? b.y + b.height + 6 : b.y - 6 - s.height;
+        n.style.left = `${inside(side ?? b.x, s.width, vw)}px`;
+        n.style.top = `${inside(y, s.height, vh)}px`;
+    }
+}
+
+/**
+ * A marked screenshot, <run dir>/shots/marked-<n>-<name>.png: the page as it is, with a banner in the status's colour
+ * (red fail, amber warn, green pass, blue info) saying the check and its detail, and a box, a numbered marker and a note
+ * on each target (at most 8; the banner counts the rest). The first target is scrolled into view. The overlay is drawn
+ * in the page and taken out again, with the scroll position put back. Undefined when it couldn't be taken: a marked
+ * screenshot is an extra, and never fails the check it shows.
+ */
+export async function marked(r: Run, page: Page, name: string, banner: { status: Finding['status']; title: string; detail?: string }, marks: Mark[] = []): Promise<string | undefined> {
+    const file = `${r.dir}/shots/marked-${String(++shotNo).padStart(3, '0')}-${slug(name)}.png`;
+    let at: number[] | undefined;
+    try {
+        mkdirSync(`${r.dir}/shots`, { recursive: true });
+        const list: Drawn[] = [];
+        for (const [i, m] of marks.entries()) {
+            const t = m.target, box = typeof t !== 'string' && 'x' in t ? t : undefined;
+            if (!box) await (typeof t === 'string' ? page.locator(t) : t as Locator).evaluateAll((els, a) => els.forEach((el) => el.setAttribute(a, '')), `data-tapcheck-m${i}`).catch(() => {});
+            // An element a suite tagged while measuring carries its own note in the tag.
+            list.push({ box, note: m.note, attr: typeof t === 'string' ? /^\[(data-tapcheck-mark-[a-z]+)\]$/.exec(t)?.[1] : undefined, colour: COLOUR[m.kind ?? KIND[banner.status]] });
+        }
+        at = await page.evaluate((n) => {
+            const at = [scrollX, scrollY];
+            for (let i = 0; i < n; i++) {
+                const el = document.querySelector(`[data-tapcheck-m${i}]`);
+                if (!el) continue;
+                const b = el.getBoundingClientRect();
+                if (b.top < 0 || b.left < 0 || b.bottom > innerHeight || b.right > innerWidth) el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+                break;
+            }
+            return at;
+        }, marks.length);
+        await page.evaluate(draw, { title: `${banner.status.toUpperCase()}: ${banner.title}`.slice(0, 160), detail: (banner.detail ?? '').slice(0, 260), colour: COLOUR[KIND[banner.status]], marks: list, max: MAX_MARKS });
+        await page.screenshot({ path: file });
+        return file;
+    } catch {
+        return undefined;
+    } finally {
+        await page.evaluate(({ n, at }) => {
+            document.getElementById('tapcheck-marks')?.remove();
+            for (let i = 0; i < n; i++) document.querySelectorAll(`[data-tapcheck-m${i}]`).forEach((el) => el.removeAttribute(`data-tapcheck-m${i}`));
+            if (at) scrollTo(at[0], at[1]);
+        }, { n: marks.length, at }).catch(() => {});
+    }
+}
+
+/**
+ * With marks on, each fail and warning of `list` that has a screenshot but no marked one (what Jev judged, a failed flow
+ * step) gets a copy of it with the banner alone, put first in its evidence. Jev says what is wrong, not where, so no
+ * box is drawn.
+ */
+export async function banners(r: Run, list: Finding[]) {
+    const todo = list.filter((f) => (f.status === 'fail' || f.status === 'warn') && /\.png$/.test(f.evidence?.[0] ?? '') && !f.evidence![0].includes('/shots/marked-'));
+    if (!todo.length) return;
+    const ctx = await (await launch()).newContext({ deviceScaleFactor: 1 });
+    try {
+        const page = await ctx.newPage();
+        for (const f of todo) {
+            try {
+                await page.setContent(`<body style="margin:0"><img style="display:block" src="data:image/png;base64,${readFileSync(f.evidence![0]).toString('base64')}">`);
+                await page.setViewportSize(await page.evaluate(async () => { const i = document.images[0]; await i.decode(); return { width: i.naturalWidth, height: i.naturalHeight }; }));
+                const shot = await marked(r, page, `${f.suite} ${f.where} ${f.check}`, { status: f.status, title: f.check, detail: [f.where, f.detail].filter(Boolean).join(' · ') });
+                if (shot) f.evidence = [shot, ...f.evidence!]; // a new list: findings of one look share theirs
+            } catch { /* the screenshot is gone or isn't one: the finding stands without a banner */ }
+        }
+    } finally {
+        await ctx.close().catch(() => {});
+    }
 }

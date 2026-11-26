@@ -9,7 +9,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import type { Page, Request, Response } from 'playwright';
-import { abs, context, facts, guard, here, host, load, watch, type Hit, type Run } from '../browser.ts';
+import { abs, context, facts, guard, here, host, load, marked, watch, type Hit, type Run } from '../browser.ts';
 import { coverage, hasParams, routes } from '../routes.ts';
 
 const SLOW_MS = 3000;
@@ -83,13 +83,16 @@ export async function run(r: Run) {
             r.record({ suite: S, where, check: 'page answers', status: st >= 200 && st < 400 ? 'pass' : 'fail', detail: `${st}${finalPath !== path.split('?')[0].replace(/#$/, '') ? ` → ${finalPath}` : ''}` });
             r.record({ suite: S, where, check: `loads under ${SLOW_MS} ms`, status: ms < SLOW_MS ? 'pass' : 'warn', detail: `${ms} ms` });
             r.record({ suite: S, where, check: 'no console or page errors', status: errors.length ? 'fail' : 'pass', detail: errors.slice(0, 3).join(' | ') || undefined });
-            if (f?.brokenImages.length) r.record({ suite: S, where, check: 'images load', status: 'fail', detail: f.brokenImages.slice(0, 5).join(', ') });
+            // MARK=1: the elements a failing check tagged while it measured, boxed on the page as it is now.
+            const shot = async (check: string, detail: string, tag: string) => { const m = r.cfg.marks ? await marked(r, page, `crawl ${where} ${check}`, { status: 'fail', title: check, detail: `${where} · ${detail}` }, [{ target: `[data-tapcheck-mark-${tag}]` }]) : undefined; return m ? [m] : undefined; };
+            if (f?.brokenImages.length) r.record({ suite: S, where, check: 'images load', status: 'fail', detail: f.brokenImages.slice(0, 5).join(', '), evidence: await shot('images load', f.brokenImages.slice(0, 5).join(', '), 'broken') });
             const unlabelled = await page.$$eval('input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea', (els) => els.filter((el) => {
                 const e = el as HTMLInputElement;
                 if (e.offsetParent === null || el.closest('[aria-hidden=true]')) return false;
                 return !(e.labels?.length || e.getAttribute('aria-label') || e.getAttribute('aria-labelledby') || e.title);
-            }).map((el) => (el as HTMLInputElement).name || el.id || el.tagName.toLowerCase())).catch(() => [] as string[]);
-            r.record({ suite: S, where, check: 'form fields labelled', status: unlabelled.length ? 'fail' : 'pass', detail: unlabelled.slice(0, 6).join(', ') || undefined });
+            }).map((el) => { el.setAttribute('data-tapcheck-mark-unlabelled', 'no label'); return (el as HTMLInputElement).name || el.id || el.tagName.toLowerCase(); })).catch(() => [] as string[]);
+            r.record({ suite: S, where, check: 'form fields labelled', status: unlabelled.length ? 'fail' : 'pass', detail: unlabelled.slice(0, 6).join(', ') || undefined,
+                evidence: unlabelled.length ? await shot('form fields labelled', unlabelled.slice(0, 6).join(', '), 'unlabelled') : undefined });
 
             for (const l of links) {
                 if (skip.test(l.split('?')[0])) continue;

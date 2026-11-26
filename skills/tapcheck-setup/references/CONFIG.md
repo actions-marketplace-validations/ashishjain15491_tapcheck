@@ -32,7 +32,7 @@ context: …                          # optional: what kind of product it is (se
 expect: […]                         # optional: findings that are right for this product (see below)
 
 sides:                              # default: { public: {} }. Names: lowercase letters, digits, dashes;
-  public: {}                        #   not crawl, contract, security, a11y, interact, audit, ux, usability, code, flow, jev, measured
+  public: {}                        #   not crawl, contract, security, a11y, interact, audit, ux, usability, code, flow, jev, measured, verify
   customer:
     baseUrl: http://app.localhost:8000   # optional, when this side lives at another address
     login: …                        # one of the kinds below; leaving it out means none
@@ -89,6 +89,7 @@ coverage: { file: COVERAGE.md, reasons: […] }   # for COVERAGE=1; see below
 flows: tests/tapcheck/*.ts          # a glob or a list of globs; see below
 mail: { mailpit: http://127.0.0.1:8025 }   # Mailpit's web address, for t.mail in flows
 browser: { args: ["--disable-features=LocalNetworkAccessChecks"] }   # extra switches for the run's Chromium; see below
+marks: false                        # true: marked screenshots (MARK=1 for one run); see below
 ```
 
 ## login
@@ -318,7 +319,7 @@ more than one worker). A flow that changes what others read (shared seed data, s
 `serial: true` in its export: it waits for the running flows to end and runs alone. Step lines in the terminal then
 start with the flow's part name. Default 1: one flow at a time, as before. Past the timeout only what a cleanup awaits itself may use `t.*`; a
 Playwright handler it adds (`page.on(…)`) needs `AsyncResource.bind` from `node:async_hooks` to count as the cleanup's. The file format and the `t` helpers (`t.goto`, `t.page`, `t.step`,
-`t.use`, `t.expect`, `t.note`, `t.jev`, `t.ask`, `t.reach`, `t.cleanup`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
+`t.use`, `t.expect`, `t.note`, `t.mark`, `t.untested`, `t.jev`, `t.ask`, `t.reach`, `t.cleanup`, `t.stub`, `t.routeOutside`, `t.mail`) are described at the
 top of `src/flow.ts` in the tapcheck folder (`<skill base directory>/../../src/flow.ts`), with a working example in
 `examples/static-site/tests/tapcheck/` there. `await t.jev('cart with two items')` has Jev look at the current page
 (the visual questions, or your own), and `await t.mail.judge(mail)` at an email from `t.mail.waitFor`: each answer is
@@ -336,6 +337,53 @@ itself (`page.request`, `fetch`) as reached, unless its status is 401, 403, 404 
 is the run's folder. `VISUAL` and `EMAIL`, tapcheck's own question sets, are exported for a flow that changes one
 question. A Jev request that fails is tried once more, and a look Jev can't answer is a warning, not a stopped flow.
 Each finished step prints a line while the flow runs.
+
+`await t.mark(check, status, marks, detail?)` records a finding the flow decided (`'pass'`, `'fail'`, `'warn'` or
+`'info'`) and, with marks on (below), a marked screenshot of the current page as its evidence. `marks` is a list of
+`{ target, note, kind? }`: a target is a selector, a Playwright locator (every element it matches gets a box) or a box
+`{ x, y, width, height }` in viewport pixels; `note` is the short text next to it; `kind` colours one mark by itself
+(`'bug'` red, `'pass'` green, `'setting'` blue, `'question'` amber) and is otherwise the status's, in the order fail,
+pass, info, warn. `detail` is the banner's second line: say what was expected and what is there. Without marks on it
+is `t.note` with a status. It never asks Jev.
+
+```ts
+await t.mark('the cart total equals the sum of the lines', sum === total ? 'pass' : 'fail',
+    [{ target: '#cart-total', note: `total ${total}` }, { target: page.locator('.cart-line .price'), note: 'a line', kind: 'setting' }],
+    `expected ${sum} (the lines added up), shown ${total}`);
+```
+
+### Verify flows (`item`, `t.untested`, `ONLY=verify`)
+
+A flow that checks one item of a release note or a pull request says which in its export:
+`item: 'The cart total always equals the sum of the lines'`. That tags its part `verify`, so `ONLY=verify` runs just
+those flows, and `report.html` and `REPORT.md` open with **Release verification**: a count (`6 passed · 1 failed ·
+2 questions · 3 not tested`), each failed item with its steps and marked screenshots, the passed items as a table
+(item, what was checked, evidence), the questions (every warning of a verify flow), and what wasn't tested. An item is
+failed when its flow has a failing finding, not tested when it called `t.untested(why)` (it needs opening hours, a
+second device, a feature that is off here), and passed when it has a pass and neither of those. Each of its findings
+carries `item` in `findings.json`. The `tapcheck-verify` skill writes these flows from a release note, a pull request
+or a range of commits.
+
+## marks (marked screenshots)
+
+Off by default. With `marks: true`, or `MARK=1` for one run (`MARK=0` turns it off for one), a failing or warning
+finding's evidence opens with a marked screenshot, `<side>/shots/marked-<n>-<name>.png`: the screen as it was when
+the check measured it (a menu still open, that viewport), a banner across it in the status's colour (red fail, amber
+warning, green pass, blue info) saying the check and its detail, and a box, a numbered marker and a short note on
+each element the check found, eight at most (`+N more` in the banner).
+
+| Part | What is boxed |
+|---|---|
+| `audit` | controls that overlap, text cut off, shortened text, targets under 24 px, the widest element behind sideways scroll, images without alt text |
+| `a11y` | the elements of each axe violation, with the rule's name |
+| `crawl` | form fields without a label, images that don't load |
+| `interact` | a control that did nothing, raised an error, set off a 5xx or opened a native dialog, when it is still on the screen |
+| flows | whatever `t.mark` names |
+| what Jev judged (`ux`, `usability`, `audit`'s look, `t.jev`), a failed flow step | the banner alone, on the screenshot that was judged: Jev says what is wrong, not where |
+
+The built-in suites mark only failures and warnings. A pass from `t.mark` gets its screenshot only on a run that
+`ONLY` or `CHANGED` scoped, and in a verify flow; on a full run it is recorded without one, so a full audit stays
+quiet. The plain screenshots stay in the evidence after the marked one, and without marks nothing changes.
 
 ## browser.args
 
@@ -361,10 +409,12 @@ check off for the run. The sign-in browser of a `form` login doesn't get these s
 | `HEADED=1` | a visible browser instead of a headless one |
 | `SLOWMO=150` | wait that many milliseconds between browser actions |
 | `START_DELAY=10` | count down that many seconds before the first action (time to start a screen recording) |
+| `MARK=1` | marked screenshots: a banner, and a box and a note on each element a failing or warning check knows (overrides `marks`; `MARK=0` turns it off) |
 | `RECORD=1` | a video and a Playwright trace of every browser context, under `<side>/videos/` and `<side>/traces/`, linked from the report |
 | `COVERAGE=1` | no run: merge every run's `hits.json` into `COVERAGE.md` (see coverage) |
 | `LOGIN=1` | sign in again by hand on `manual` sides |
 | `CONTRACT_UPDATE=1` | accept the current JSON response shapes as the contract baseline |
 | `TAPCHECK_CONFIG=path` | another config file instead of `./tapcheck.yml` |
 
-Tags: each suite's name, each side's name, `jev` (ux, usability), `measured` (everything else), `code`, `flow`.
+Tags: each suite's name, each side's name, `jev` (ux, usability), `measured` (everything else), `code`, `flow`, and
+`verify` (the flows with an `item`).

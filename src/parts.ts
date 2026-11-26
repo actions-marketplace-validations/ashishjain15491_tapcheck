@@ -14,13 +14,14 @@ export type State = { parts: Record<string, Snap>; reset?: Snap }; // the code e
 const JEV = ['ux', 'usability']; // the suites Jev judges
 const NEEDS_CRAWL = ['contract', 'security', 'interact']; // they read the crawl's records
 
-/** Every part in run order: code (when there is any), then by side its suites and its flows (`part` is a flow's part name). */
-export const build = (sides: string[], extra: { code?: boolean; flows?: { part: string; side: string }[] } = {}): Part[] => [
+/** Every part in run order: code (when there is any), then by side its suites and its flows (`part` is a flow's part
+ * name; one with an `item` verifies a release item and is tagged verify too). */
+export const build = (sides: string[], extra: { code?: boolean; flows?: { part: string; side: string; item?: string }[] } = {}): Part[] => [
     ...(extra.code ? [{ name: 'code', suite: 'code', side: '', tags: ['code', 'measured'], needs: [] }] : []),
     ...sides.flatMap((side) => [
         ...SUITES.map((suite) => ({ name: `${suite}-${side}`, suite, side, tags: [suite, side, JEV.includes(suite) ? 'jev' : 'measured'],
             needs: NEEDS_CRAWL.includes(suite) ? [`crawl-${side}`] : [] })),
-        ...(extra.flows ?? []).filter((f) => f.side === side).map((f) => ({ name: f.part, suite: 'flow', side, tags: ['flow', side, 'measured'], needs: [] })),
+        ...(extra.flows ?? []).filter((f) => f.side === side).map((f) => ({ name: f.part, suite: 'flow', side, tags: ['flow', side, 'measured', ...(f.item ? ['verify'] : [])], needs: [] })),
     ]),
 ];
 /** The suite name a part's findings carry: its suite, or for a flow its own name (so one flow failing doesn't fail the others). */

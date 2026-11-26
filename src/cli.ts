@@ -6,7 +6,8 @@
  * side, and jev (ux, usability) or measured (crawl, contract, security, a11y, interact, audit). Two more kinds of part:
  *   code          the project's own gates (`gates:`) and the route sign-in check (`routes:`); tags code, measured. It has
  *                 no side: a run of only `code` starts no app and no browser.
- *   flow-<name>   each custom flow (`flows:`, see src/flow.ts) on its side; tags flow, its side, measured.
+ *   flow-<name>   each custom flow (`flows:`, see src/flow.ts) on its side; tags flow, its side, measured, and verify
+ *                 when it checks a release item (`item`): the report then opens with "Release verification".
  * With `stub:` in tapcheck.yml, a stub server (src/stub.ts) stands in for the outside services the app calls; it starts
  * before the app, and its address is TAPCHECK_STUB_URL for app.start, the gates and tapcheck.yml itself (with `stub.dns`
  * it answers DNS too, at TAPCHECK_DNS).
@@ -29,6 +30,9 @@
  *                                   actions; START_DELAY=10 counts down that many seconds before the first one
  *   RECORD=1 tapcheck               a video and a Playwright trace of every browser context, per side under videos/ and
  *                                   traces/, linked from the report (open a trace with npx playwright show-trace <file>)
+ *   MARK=1 tapcheck                 marked screenshots (default `marks` in tapcheck.yml): a fail's or warning's evidence opens
+ *                                   with the screen as it was, a banner saying the check, and a box and a note on each element
+ *                                   the check knows; what Jev judged gets the banner alone
  *   COVERAGE=1 tapcheck             no run: merge the hits.json of every run so far into COVERAGE.md (coverage.file): each
  *                                   route of `routes:` with the part that reached it or GAP, and the dialogs and tables seen
  *   LOGIN=1 tapcheck                sign in again by hand on manual sides
@@ -50,7 +54,7 @@ import { dirname, resolve } from 'node:path';
 import { CHANGE_KEYS, isLocal, load, SUITES, type Config } from './config.ts';
 import { build, changedParts, findingSuite, list, mark, pool, resetDue, select, snapshot, withNeeds, type Part, type State } from './parts.ts';
 import { signIn } from './auth.ts';
-import { closeBrowser, countdown, launch, recordings, SessionExpired, startDelay, type Run } from './browser.ts';
+import { banners, closeBrowser, countdown, launch, recordings, SessionExpired, startDelay, type Run } from './browser.ts';
 import { coverage, hits } from './coverage.ts';
 import { routes } from './routes.ts';
 import * as jev from './jev.ts';
@@ -152,6 +156,8 @@ const skipped: Record<string, string> = {}; // Jev parts left out, and why: neit
 const notRun: Record<string, string> = {}; // parts that couldn't run, and why: they count as failed
 
 const label = (p: Part) => (p.suite === 'flow' ? p.name : p.suite);
+/** A verify flow's release item, for the findings the run itself records about that part. */
+const itemOf = (p: Part) => { const item = flows.find((f) => f.part === p.name)?.item; return item ? { item } : {}; };
 /** Runs one part; what it throws becomes a failing finding of its own and is returned. */
 async function runPart(p: Part, rec: Run['record'], fn: () => Promise<void>, together = false): Promise<unknown> {
     const t0 = Date.now();
@@ -165,7 +171,7 @@ async function runPart(p: Part, rec: Run['record'], fn: () => Promise<void>, tog
     } catch (e) {
         const msg = (e as Error).message;
         console.log(`${end}stopped: ${msg}`);
-        rec({ suite: findingSuite(p), where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300) });
+        rec({ suite: findingSuite(p), where: 'suite', check: 'suite ran to the end', status: 'fail', detail: msg.slice(0, 300), ...itemOf(p) });
         return e;
     }
 }
@@ -216,7 +222,8 @@ try {
         mkdirSync(sideDir, { recursive: true });
         console.log(`\n${side.name} at ${side.baseUrl}: ${parts.map(label).join(', ')}`);
         // reached: one list, so the copies the flows running together get (each its own part and step) share it
-        const r: Run = { cfg, side, dir: sideDir, record: (f) => record(expected({ ...f, side: side.name }, cfg.expect)), crawl: { pages: [], hits: [], done: false }, reached: [] };
+        const r: Run = { cfg, side, dir: sideDir, record: (f) => record(expected({ ...f, side: side.name }, cfg.expect)), crawl: { pages: [], hits: [], done: false }, reached: [],
+            scoped: !!process.env.ONLY || !['', '0'].includes(process.env.CHANGED ?? '') };
         try {
             r.auth = await signIn(cfg, side);
         } catch (e) {
@@ -229,7 +236,10 @@ try {
         const one = async (p: Part, rp: Run, together = false) => {
             if (jevOff && p.tags.includes('jev')) { console.log(`  ${p.suite}… skipped (${jevOff})`); skipped[p.name] = jevOff; return; }
             const flow = flows.find((f) => f.part === p.name);
+            const from = findings.length;
             const e = await runPart(p, rp.record, () => (flow ? runFlow(flow, rp, stub?.url) : RUN[p.suite as keyof typeof RUN](rp)), together);
+            // MARK=1: what this part found with a plain screenshot (Jev's judgments, a failed step) gets the banner on it.
+            if (cfg.marks) await banners(rp, findings.slice(from).filter((f) => f.suite === findingSuite(p) && f.side === p.side)).catch(() => {});
             if (e instanceof jev.BudgetReached) jevOff = 'Jev budget reached';
             if (e instanceof SessionExpired) expired = true;
         };
@@ -263,7 +273,7 @@ try {
         const skip = skipped[p.name];
         const hint = skip && !/budget/.test(skip) ? ' To run it, set TYPESAFE_API_KEY in the environment or in .env here, without JEV=off.'
             : skip ? ' Raise JEV_BUDGET (or jev.budget) to let it finish.' : '';
-        record({ suite: findingSuite(p), side: p.side, where: p.name, check: 'part ran', status: skip ? 'info' : 'fail',
+        record({ ...itemOf(p), suite: findingSuite(p), side: p.side, where: p.name, check: 'part ran', status: skip ? 'info' : 'fail',
             detail: `${skip ? `skipped (${skip})` : `not run (${notRun[p.name] ?? 'the run stopped before it'})`}.${hint}` });
     }
     const { bySuite, fails } = write(dir, { base: cfg.baseUrl, started, note, recordings });

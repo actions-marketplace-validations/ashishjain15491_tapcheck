@@ -55,7 +55,7 @@ published: `npm pack --dry-run`.
 | `src/suites/` | one file per suite |
 | `src/flow.ts` | the flow API (the package's export) |
 | `schema/` | the JSON Schema of `tapcheck.yml` |
-| `skills/` | the plugin's three skills and their references |
+| `skills/` | the plugin's four skills and their references |
 | `bin/tapcheck` | the launcher the skills use from a checkout |
 | `action.yml`, `Dockerfile` | the GitHub Action and the image |
 | `examples/static-site/` | a working example, used by the tests |

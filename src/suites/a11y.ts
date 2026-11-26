@@ -5,7 +5,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { context, open, resolve, SessionExpired, slug, type Run } from '../browser.ts';
+import { context, marked, open, resolve, SessionExpired, slug, type Run } from '../browser.ts';
 
 export const AXE = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 const TABS = 12;
@@ -29,8 +29,11 @@ export async function run(r: Run) {
                     all[`${slug(s.name)}-${vp.name}`] = res.violations.map((x: any) => ({ id: x.id, impact: x.impact, help: x.help, nodes: x.nodes.slice(0, 5).map((n: any) => n.target) }));
                     for (const impact of ['critical', 'serious', 'moderate'] as const) {
                         const v = res.violations.filter((x: any) => x.impact === impact);
-                        r.record({ suite: S, where, check: `axe: no ${impact} violations`, status: v.length ? (impact === 'moderate' ? 'warn' : 'fail') : 'pass',
-                            detail: v.map((x: any) => `${x.id} ×${x.nodes.length}`).join(', ') || undefined });
+                        const status = v.length ? (impact === 'moderate' ? 'warn' : 'fail') : 'pass', detail = v.map((x: any) => `${x.id} ×${x.nodes.length}`).join(', ') || undefined;
+                        // MARK=1: axe's own selector for each node, with its rule as the note (a node inside a frame or a shadow root has no single selector).
+                        const shot = v.length && r.cfg.marks ? await marked(r, page, `a11y ${where} ${impact}`, { status, title: `axe: no ${impact} violations`, detail: `${where} · ${detail}` },
+                            v.flatMap((x: any) => x.nodes.filter((n: any) => n.target.length === 1 && typeof n.target[0] === 'string').map((n: any) => ({ target: n.target[0] as string, note: x.id })))) : undefined;
+                        r.record({ suite: S, where, check: `axe: no ${impact} violations`, status, detail, evidence: shot ? [shot] : undefined });
                     }
                     if (vp.mobile) continue;
                     // Keyboard: does Tab move focus, and can a person see where it is?

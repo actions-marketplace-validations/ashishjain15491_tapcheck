@@ -19,7 +19,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import type { Config } from '../config.ts';
-import { context, hashRoute, open, resolve, SessionExpired, slices, slug, type Run, type Viewport } from '../browser.ts';
+import { context, hashRoute, marked, open, resolve, SessionExpired, slices, slug, type Run, type Viewport } from '../browser.ts';
 import { ask, BudgetReached, img, whyOff } from '../jev.ts';
 import { VISUAL } from '../questions.ts';
 import { AXE } from './a11y.ts';
@@ -29,6 +29,9 @@ import { visual } from './ux.ts';
 const S = 'audit';
 const NARROW: Viewport[] = [{ name: 'tablet', width: 768, height: 1024, mobile: false }, { name: 'phone', width: 375, height: 812, mobile: true }];
 const WARN = new Set(['shortened text can be read in full', 'heading levels in order']); // the other measured checks fail
+// The checks that know their elements: measure() tags each with data-tapcheck-mark-<this> (its value the element's note), for a marked screenshot.
+const MARKS: Record<string, string> = { 'no sideways scroll': 'wide', 'text is not cut off': 'cut', 'shortened text can be read in full': 'short', 'controls do not overlap': 'overlap',
+    'targets at least 24 px': 'small', 'images have alt text': 'alt' };
 const TABS = 20, MAX_POPUPS = 4;
 const POPUP = '[role=menu], [role=listbox], dialog[open], [role=dialog], [role=alertdialog], [popover]:popover-open';
 // ponytail: primary, secondary and danger is the most a button kind gets before its colours count as inconsistent; fields get one.
@@ -52,9 +55,12 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
     const all = [...root.querySelectorAll('*')].filter(visible);
     const cut = new Set<string>(), short = new Set<string>(), overlap = new Set<string>(), small = new Set<string>();
     const problems: Record<string, string[]> = {};
+    const mark = (el: Element, what: string, note: string) => el.setAttribute(`data-tapcheck-mark-${what}`, note);
+    for (const what of ['wide', 'cut', 'short', 'overlap', 'small', 'alt']) document.querySelectorAll(`[data-tapcheck-mark-${what}]`).forEach((el) => el.removeAttribute(`data-tapcheck-mark-${what}`)); // an earlier measure's
 
     if (!rootSel) {
         const wide = document.documentElement.scrollWidth > vw + 1 && all.filter((e) => e.getBoundingClientRect().right > vw + 1).sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right)[0];
+        if (wide) mark(wide, 'wide', `widest: ${desc(wide)}`);
         problems['no sideways scroll'] = document.documentElement.scrollWidth > vw + 1 ? [`the page is ${document.documentElement.scrollWidth} px wide in a ${vw} px window${wide ? `; widest: ${desc(wide)}` : ''}`] : [];
     } else {
         const b = root.getBoundingClientRect();
@@ -68,8 +74,8 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
         const s = getComputedStyle(el);
         if (el.scrollWidth <= el.clientWidth + 1 || !/hidden|clip/.test(s.overflowX)) continue;
         if (!ownText(el) && ![...el.children].every((c) => getComputedStyle(c).display.startsWith('inline'))) continue;
-        if (s.textOverflow !== 'ellipsis') cut.add(`"${txt(el)}" (${desc(el)})`);
-        else if (!el.getAttribute('title') && !el.getAttribute('aria-label') && !el.closest('[title], [aria-describedby]')) short.add(`"${txt(el)}" (${desc(el)})`);
+        if (s.textOverflow !== 'ellipsis') { cut.add(`"${txt(el)}" (${desc(el)})`); mark(el, 'cut', 'text cut off'); }
+        else if (!el.getAttribute('title') && !el.getAttribute('aria-label') && !el.closest('[title], [aria-describedby]')) { short.add(`"${txt(el)}" (${desc(el)})`); mark(el, 'short', 'shortened, with no way to read it'); }
     }
 
     // Controls, each clipped to what its scrolling ancestors leave visible.
@@ -89,7 +95,7 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
     for (const [i, a] of controls.entries()) for (const b of controls.slice(i + 1)) {
         if (a.el.contains(b.el) || b.el.contains(a.el) || (a.el.closest('label') && a.el.closest('label') === b.el.closest('label'))) continue;
         const w = Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left), h = Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top);
-        if (w > 4 && h > 4 && w * h > 0.25 * Math.min(a.box.width * a.box.height, b.box.width * b.box.height)) overlap.add(`${name(a.el)} ↔ ${name(b.el)}`);
+        if (w > 4 && h > 4 && w * h > 0.25 * Math.min(a.box.width * a.box.height, b.box.width * b.box.height)) { overlap.add(`${name(a.el)} ↔ ${name(b.el)}`); for (const c of [a, b]) mark(c.el, 'overlap', `${name(a.el)} ↔ ${name(b.el)}`); }
     }
     // WCAG 2.2 target size (2.5.8): under 24 px fails unless a 24 px area centred on it touches no other target. Links in a sentence are exempt.
     for (const { el } of controls) {
@@ -98,7 +104,7 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
         if (el.matches('a') && el.closest('p, li, td, dd') && getComputedStyle(el).display === 'inline') continue;
         const cx = r.left + r.width / 2, cy = r.top + r.height / 2, hw = Math.max(12, r.width / 2), hh = Math.max(12, r.height / 2);
         const crowded = controls.some((o) => { const t = o.el.getBoundingClientRect(); return o.el !== el && !o.el.contains(el) && !el.contains(o.el) && t.left < cx + hw && t.right > cx - hw && t.top < cy + hh && t.bottom > cy - hh; });
-        if (crowded) small.add(`${name(el)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+        if (crowded) { small.add(`${name(el)} ${Math.round(r.width)}×${Math.round(r.height)}`); mark(el, 'small', `${Math.round(r.width)}×${Math.round(r.height)} px`); }
     }
     Object.assign(problems, { 'text is not cut off': [...cut], 'shortened text can be read in full': [...short], 'controls do not overlap': [...overlap], 'targets at least 24 px': [...small] });
 
@@ -116,7 +122,7 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
     const heads = [...root.querySelectorAll('h1, h2, h3, h4, h5, h6')].filter(visible);
     problems['no leaked placeholders'] = [...leaked];
     problems['heading levels in order'] = heads.slice(1).flatMap((h, i) => (+h.tagName[1] > +heads[i].tagName[1] + 1 ? [`${heads[i].tagName.toLowerCase()} → ${h.tagName.toLowerCase()} "${txt(h)}"`] : []));
-    problems['images have alt text'] = [...root.querySelectorAll('img')].filter((i) => visible(i) && !i.hasAttribute('alt') && !i.getAttribute('aria-label')).map((i) => i.src.slice(-60));
+    problems['images have alt text'] = [...root.querySelectorAll('img')].filter((i) => visible(i) && !i.hasAttribute('alt') && !i.getAttribute('aria-label')).map((i) => { mark(i, 'alt', 'no alt text'); return i.src.slice(-60); });
 
     // Controls by kind, with the look that should be the same wherever the kind is used.
     for (const el of all) {
@@ -226,14 +232,16 @@ export async function run(r: Run) {
             r.record({ suite: S, where: 'Jev', check: "Jev's look at each screen, menu and dialog", status: 'info', detail: `stopped at ${where}: ${e.message}` });
         }
     };
-    /** One finding per measured check; the problems also go to audit.json. */
+    /** One finding per measured check; the problems also go to audit.json. With marks on, a check that knows its
+     * elements gets a marked screenshot of the page as it was measured (a menu still open, this viewport), put first. */
     const emit = async (page: Page, screen: (typeof out.screens)[number], view: string, where: string, problems: Record<string, string[]>, shots?: string[]) => {
         const bad = Object.values(problems).some((l) => l.length);
         const shot = `${r.dir}/shots/audit-${slug(where)}.png`;
         if (bad && !shots) await page.screenshot({ path: shot });
         for (const [check, list] of Object.entries(problems)) {
-            r.record({ suite: S, where, check, status: !list.length ? 'pass' : WARN.has(check) ? 'warn' : 'fail', detail: list.length ? `${list.length}: ${list.slice(0, 5).join('; ')}` : undefined,
-                evidence: list.length ? shots ?? [shot] : undefined });
+            const status = !list.length ? 'pass' : WARN.has(check) ? 'warn' : 'fail', detail = list.length ? `${list.length}: ${list.slice(0, 5).join('; ')}` : undefined;
+            const drawn = list.length && r.cfg.marks && MARKS[check] ? await marked(r, page, `audit ${where} ${check}`, { status, title: check, detail: `${where} · ${detail}` }, [{ target: `[data-tapcheck-mark-${MARKS[check]}]` }]) : undefined;
+            r.record({ suite: S, where, check, status, detail, evidence: list.length ? [...(drawn ? [drawn] : []), ...(shots ?? [shot])] : undefined });
         }
         screen.views[view] = Object.fromEntries(Object.entries(problems).filter(([, l]) => l.length));
     };

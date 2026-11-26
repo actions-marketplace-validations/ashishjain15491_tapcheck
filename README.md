@@ -38,7 +38,8 @@ Jev parts are skipped and everything else runs.
 
 Pick one. Each runs the same CLI.
 
-**Claude Code or Codex plugin.** Three skills set tapcheck up for your app, run it and fix what it finds. In Claude
+**Claude Code or Codex plugin.** Four skills set tapcheck up for your app, run it, fix what it finds and verify a
+release or a pull request item by item. In Claude
 Code:
 
 ```
@@ -161,8 +162,8 @@ git clone https://github.com/ashishjain15491/tapcheck && docker build -t tapchec
 docker run --rm --ipc=host -e TYPESAFE_API_KEY -v "$PWD:/work" -w /work tapcheck
 ```
 
-Options are environment variables (`ONLY`, `SKIP`, `CHANGED`, `PARALLEL=4` for flows at once, `LIST=1` to list the
-parts); the full list is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
+Options are environment variables (`ONLY`, `SKIP`, `CHANGED`, `PARALLEL=4` for flows at once, `MARK=1` for marked
+screenshots, `LIST=1` to list the parts); the full list is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
 
 ## Output
 

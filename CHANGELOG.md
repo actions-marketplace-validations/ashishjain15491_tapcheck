@@ -12,6 +12,17 @@
   to Jev with every question, so screens are judged against what its users expect. `expect:` lists findings that are
   right for the product, as `{ match, why }` on `<suite>: <check> @ <where>`: a matching fail or warn is recorded as
   info with the reason, so it stays in the report without failing the run.
+- **Marked screenshots.** `MARK=1` (or `marks: true`) puts a marked screenshot first in a failing or warning finding's
+  evidence: the screen as it was measured, a banner saying the check, and a box, a number and a note on each element.
+  `audit`, `a11y`, `crawl` and `interact` mark the elements they found; what Jev judged, and a failed flow step, get
+  the banner alone. Off by default, and nothing changes without it.
+- **t.mark.** `t.mark(check, status, marks, detail?)` records a finding a flow decided, with a marked screenshot of
+  the current page: red for a bug, green for a pass, blue for a setting, amber for a question. It needs no Jev.
+- **Verify a release or a pull request.** The new `tapcheck-verify` skill splits a release note, a pull request or a
+  range of commits into items and writes a flow for each. A flow says which item it checks with `item:`, or
+  `t.untested(why)` when it can't be checked now; `ONLY=verify` runs just those flows, and the report opens with
+  "Release verification": the count, the failed items with their steps and screenshots, the passed table, the
+  questions and what wasn't tested. `verify` is a tag now, so no side can be called that.
 
 ## 0.1.2 (2026-11-25)
 

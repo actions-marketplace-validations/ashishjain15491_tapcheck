@@ -37,6 +37,8 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 | everything but something | `SKIP=usability TAPCHECK`; both together: `ONLY=customer SKIP=jev TAPCHECK` |
 | no AI judgment, free, fast | `JEV=off TAPCHECK` (or `ONLY=measured`) |
 | only the linters and audits | `ONLY=code TAPCHECK` (starts no app and no browser) |
+| "verify this release", "check what PR 42 claims", "QA the deploy" | the `tapcheck-verify` skill (it writes a flow per release item, then `MARK=1 ONLY=verify TAPCHECK`) |
+| screenshots that show where the problem is | add `MARK=1` to any of the above |
 | what would run | add `LIST=1` to any of the above |
 
 - `CHANGED=1` runs, of the chosen parts, those whose files changed since each last passed, and any that never
@@ -74,6 +76,10 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 - `RECORD=1` keeps a video and a Playwright trace of every browser context. Use it when a failure can't be understood
   from its screenshot, on the failing parts only (`RECORD=1 ONLY=flow-checkout`): it makes runs slower and the run
   folder larger.
+- `MARK=1` (or `marks: true` in `tapcheck.yml`) puts a marked screenshot first in the evidence of each failing or
+  warning finding: a banner saying the check, and a box and a note on each element the check found (`audit`, `a11y`,
+  `crawl`, `interact`, a flow's `t.mark`); what Jev judged gets the banner alone. Use it when the report is for
+  people to read; it adds screenshots, not checks.
 - `TAPCHECK_CONFIG=path` uses another config file.
 
 ### Jev and its cost
@@ -109,7 +115,8 @@ The run folder is the one on the `Report:` line (the newest `run-*` under `out`,
 ```
 
 `status` is `fail`, `warn`, `info` or `pass`. `evidence` paths are relative to the folder you ran in; look at a
-screenshot before describing what it shows. More detail per side is in the run folder: `crawl.json` (pages and link
+screenshot before describing what it shows (a `shots/marked-*.png` one has the problem boxed). A finding of a verify
+flow also carries `item`, the release item it checks, and the report then opens with "Release verification". More detail per side is in the run folder: `crawl.json` (pages and link
 statuses), `network.json` (every request), `axe.json`, `interact.json` (the controls, dialogs and tables exercised),
 `audit.json` (every audit problem, the looks of each kind of control, styles outside the tokens), `clickstream.json`,
 `missed-routes.json`, `hits.json` (what each part reached), and `code.json` (the gates' output) at the top.

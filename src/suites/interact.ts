@@ -23,7 +23,7 @@
 import { writeFileSync } from 'node:fs';
 import type { Locator, Page } from 'playwright';
 import { isLocal } from '../config.ts';
-import { context, hashRoute, host, open, reach, SessionExpired, watch, type Run } from '../browser.ts';
+import { context, hashRoute, host, marked, open, reach, SessionExpired, watch, type Run } from '../browser.ts';
 import type { Finding } from '../report.ts';
 import { UNSAFE } from './usability.ts';
 
@@ -172,11 +172,12 @@ export async function run(r: Run) {
             // On a hash-routed screen a new hash is another screen; elsewhere a hash is a place on the same page.
             const still = (u: string) => (hashRoute(path) ? u : u.split('#')[0]);
             const broke: string[] = [], failed: string[] = [], native: string[] = [], dead: string[] = [], clicked: string[] = [];
+            const who = { broke: [] as string[], failed: [] as string[], native: [] as string[] }; // the labels behind those lists, for a marked screenshot
             const clear = () => { seen.errors.length = seen.bad.length = seen.natives.length = seen.requests = seen.popups = 0; };
             const drain = (label: string) => {
-                if (seen.errors.length) broke.push(`"${label}": ${seen.errors[0].slice(0, 120)}`);
-                if (seen.bad.length) failed.push(`"${label}" → ${seen.bad[0]}`);
-                if (seen.natives.length) native.push(`"${label}": ${seen.natives[0]}`);
+                if (seen.errors.length) { broke.push(`"${label}": ${seen.errors[0].slice(0, 120)}`); who.broke.push(label); }
+                if (seen.bad.length) { failed.push(`"${label}" → ${seen.bad[0]}`); who.failed.push(label); }
+                if (seen.natives.length) { native.push(`"${label}": ${seen.natives[0]}`); who.native.push(label); }
                 clear();
             };
             try {
@@ -272,10 +273,17 @@ export async function run(r: Run) {
                     log.tables.push(entry);
                 }
 
-                r.record({ suite: S, where: path, check: 'clicks raise no page or console errors', status: broke.length ? 'fail' : 'pass', detail: broke.slice(0, 4).join(' | ') || `${clicked.length} control(s) clicked` });
-                r.record({ suite: S, where: path, check: 'clicks set off no 5xx', status: failed.length ? 'fail' : 'pass', detail: failed.slice(0, 4).join('; ') || undefined });
-                r.record({ suite: S, where: path, check: 'no native alert, confirm or prompt', status: native.length ? 'fail' : 'pass', detail: native.slice(0, 4).join('; ') || undefined });
-                r.record({ suite: S, where: path, check: 'every control does something', status: dead.length ? 'warn' : 'pass', detail: dead.length ? `nothing changed after: ${dead.slice(0, 6).map((l) => `"${l}"`).join(', ')}` : undefined });
+                // MARK=1: the screen once more, and each failing check's controls boxed, those that are still there under the same label.
+                const now = r.cfg.marks && (broke.length || failed.length || native.length || dead.length) ? await open(r, page, path).then(() => tag(page, own, r.cfg.crawl.skip)).catch(() => []) : [];
+                const rec = async (check: string, status: Status, detail: string | undefined, labels: string[], note: string) => {
+                    const marks = status === 'pass' ? [] : now.filter((c) => labels.includes(c.label)).map((c) => ({ target: `[data-tapcheck="${c.i}"]`, note }));
+                    const shot = marks.length ? await marked(r, page, `interact ${path} ${check}`, { status, title: check, detail: `${path} · ${detail}` }, marks) : undefined;
+                    r.record({ suite: S, where: path, check, status, detail, evidence: shot ? [shot] : undefined });
+                };
+                await rec('clicks raise no page or console errors', broke.length ? 'fail' : 'pass', broke.slice(0, 4).join(' | ') || `${clicked.length} control(s) clicked`, who.broke, 'raised an error');
+                await rec('clicks set off no 5xx', failed.length ? 'fail' : 'pass', failed.slice(0, 4).join('; ') || undefined, who.failed, 'set off a 5xx');
+                await rec('no native alert, confirm or prompt', native.length ? 'fail' : 'pass', native.slice(0, 4).join('; ') || undefined, who.native, 'opened a native dialog');
+                await rec('every control does something', dead.length ? 'warn' : 'pass', dead.length ? `nothing changed after: ${dead.slice(0, 6).map((l) => `"${l}"`).join(', ')}` : undefined, dead, 'nothing changed');
             } catch (e) {
                 if (e instanceof SessionExpired) throw e;
                 r.record({ suite: S, where: path, check: 'sweep ran', status: 'fail', detail: (e as Error).message.slice(0, 200) });

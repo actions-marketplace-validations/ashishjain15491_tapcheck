@@ -47,7 +47,7 @@
             "default": { "public": {} },
             "propertyNames": {
                 "pattern": "^[a-z][a-z0-9-]*$",
-                "not": { "enum": ["crawl", "contract", "security", "a11y", "interact", "audit", "ux", "usability", "code", "flow", "jev", "measured"] }
+                "not": { "enum": ["crawl", "contract", "security", "a11y", "interact", "audit", "ux", "usability", "code", "flow", "jev", "measured", "verify"] }
             },
             "additionalProperties": {
                 "type": ["object", "null"],
@@ -270,6 +270,10 @@
             "description": "Globs of flow files (TypeScript or JavaScript); each file is its own part, flow-<name>. Flows may change data.",
             "oneOf": [{ "$ref": "#/definitions/text" }, { "type": "array", "items": { "$ref": "#/definitions/text" } }],
             "default": []
+        },
+        "marks": {
+            "description": "Marked screenshots (MARK=1 or MARK=0 overrides it for one run): a failing or warning finding's evidence opens with the screen as it was measured, a banner saying the check, and a box, a number and a note on each element the check knows (audit, a11y, crawl, interact, and t.mark in flows). What Jev judged gets the banner alone.",
+            "type": "boolean", "default": false
         },
         "mail": {
             "type": "object",

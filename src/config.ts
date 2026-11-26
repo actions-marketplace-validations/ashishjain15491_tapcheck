@@ -64,6 +64,7 @@ export type Config = {
     parallel: number; // how many flows of a side run at once (PARALLEL overrides it); 1 runs them one by one
     mail: { mailpit?: string }; // Mailpit's web address, for t.mail in flows
     browser: { args: string[] }; // extra command-line switches for the run's Chromium
+    marks: boolean; // marked screenshots (MARK=1 or MARK=0 overrides it): the banner, boxes and notes drawn on a fail's or warning's evidence
 };
 
 const DEFAULT_SKIP = '/(logout|log-out|sign-?out|delete|destroy|remove|export|download|impersonat|unsubscribe)|\\.(csv|pdf|zip|png|jpe?g|gif|svg|webp|ico|xlsx?)$';
@@ -270,7 +271,7 @@ export function check(raw: any, root = process.cwd()): Config {
     const sides = Object.entries(sideDefs).map(([name, s]): Side => {
         if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`sides.${name}`, 'name must be lowercase letters, digits and dashes');
         // Side names are tags too (ONLY=<side>), so they can't reuse a suite or kind tag.
-        if ([...CHANGE_KEYS, 'jev', 'measured'].includes(name)) fail(`sides.${name}`, `name can't be a suite or tag name (${[...CHANGE_KEYS, 'jev', 'measured'].join(', ')})`);
+        if ([...CHANGE_KEYS, 'jev', 'measured', 'verify'].includes(name)) fail(`sides.${name}`, `name can't be a suite or tag name (${[...CHANGE_KEYS, 'jev', 'measured', 'verify'].join(', ')})`);
         return { name, baseUrl: s?.baseUrl ? url(s.baseUrl, `sides.${name}.baseUrl`) : baseUrl, login: login(s?.login, `sides.${name}.login`), csrf: csrfOf(s?.csrf, `sides.${name}.csrf`),
             screens: screens(byside('screens', name), at('screens', name)), tasks: tasks(byside('tasks', name), at('tasks', name)) };
     });
@@ -332,7 +333,10 @@ export function check(raw: any, root = process.cwd()): Config {
     if ((raw.browser !== undefined && (!raw.browser || typeof raw.browser !== 'object' || Array.isArray(raw.browser))) || !Array.isArray(args) || args.some((a: unknown) => typeof a !== 'string' || !a.startsWith('--')))
         fail('browser', 'must be {args: ["--a-chromium-switch", …]}');
 
-    return { root, baseUrl, app, sides, changes, browser: { args }, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows, parallel,
+    if (raw.marks !== undefined && typeof raw.marks !== 'boolean') fail('marks', 'must be true or false');
+    const marks = ['0', '1'].includes(process.env.MARK ?? '') ? process.env.MARK === '1' : raw.marks === true;
+
+    return { root, baseUrl, app, sides, changes, marks, browser: { args }, gates: gates(raw.gates), routes: str(raw.routes, 'routes', true), stub: stub(raw.stub, root), coverage: coverage(raw.coverage), flows, parallel,
         mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, context: str(raw.context, 'context', true), expect: expect(raw.expect), jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
         crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, interact: { max: interactMax, submit: it.submit === true },

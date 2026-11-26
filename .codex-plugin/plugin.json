@@ -1,7 +1,7 @@
 {
     "name": "tapcheck",
     "version": "0.1.2",
-    "description": "End-to-end and UI audit for any web app, whatever its stack. Skills set tapcheck up for your project, run it, and fix what it finds.",
+    "description": "End-to-end and UI audit for any web app, whatever its stack. Skills set tapcheck up for your project, run it, fix what it finds, and verify a release item by item.",
     "author": {
         "name": "ashishjain15491",
         "url": "https://github.com/ashishjain15491"
@@ -14,7 +14,7 @@
     "interface": {
         "displayName": "tapcheck",
         "shortDescription": "End-to-end and UI audit for any web app",
-        "longDescription": "Drives your running app in a real browser and reports what it finds: broken pages and links, API contract breaks, missing security headers, accessibility violations, and Jev's judgment of design and usability. Three skills set it up for your stack, run it, and fix the failures.",
+        "longDescription": "Drives your running app in a real browser and reports what it finds: broken pages and links, API contract breaks, missing security headers, accessibility violations, and Jev's judgment of design and usability. Four skills set it up for your stack, run it, fix the failures, and verify a release or a pull request item by item.",
         "developerName": "ashishjain15491",
         "category": "Coding",
         "capabilities": ["Interactive", "Read", "Write"],
@@ -25,7 +25,8 @@
         "defaultPrompt": [
             "Set up tapcheck for this app.",
             "Run tapcheck on what I changed.",
-            "Fix the tapcheck failures."
+            "Fix the tapcheck failures.",
+            "Verify this release with tapcheck."
         ]
     }
 }

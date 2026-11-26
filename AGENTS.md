@@ -11,6 +11,7 @@ them without plugin support:
 - `skills/tapcheck-setup/SKILL.md`: detect the project's stack, write `tapcheck.yml`, get a first run through.
 - `skills/tapcheck-run/SKILL.md`: pick the parts to run, run them, report the findings.
 - `skills/tapcheck-fix/SKILL.md`: fix failing findings in the app's code and rerun until they pass.
+- `skills/tapcheck-verify/SKILL.md`: check what one release or pull request changed, item by item, and report it.
 
 Run the CLI with `bin/tapcheck` from the folder that holds the project's `tapcheck.yml` (Node.js 23.6 or newer; the
 first run installs its dependencies). Without a checkout, `npx @ashishjain15491/tapcheck@<version>` is the same CLI from npm (Node.js 22.18 or newer, after `npx playwright install chromium`). Every `tapcheck.yml` key is in

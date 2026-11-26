@@ -20,30 +20,45 @@
  * finding without a step. Unlike the suites, a flow may click anything and change data: run it against a copy
  * you can reset. t.jev() and t.mail.judge() ask Jev to look at the current page or at an email; with JEV=off or no key
  * they record that they were skipped and return null, so a flow that calls them still runs everywhere.
+ *
+ * t.mark(check, status, marks, detail?) records a finding the flow decided ('pass', 'fail', 'warn' or 'info') and, with
+ * marks on (MARK=1, or marks: true in tapcheck.yml), a marked screenshot of the current page as its evidence: a banner
+ * in the status's colour saying the check and its detail (say what was expected and what is there), and a box, a
+ * numbered marker and a note on each `{ target, note, kind? }`. A target is a selector, a Playwright locator, or a box
+ * `{ x, y, width, height }` in viewport pixels; kind colours one mark by itself ('bug' red, 'pass' green, 'setting'
+ * blue, 'question' amber) and is otherwise the status's: fail, pass, info, warn in that order. A failure, a warning and
+ * an info are drawn on every run with marks on; a pass only on a run that ONLY or CHANGED scoped, or in a verify flow,
+ * so a full audit stays quiet. It needs no Jev.
+ *
+ * A verify flow checks one item of a release note or a pull request: it says which in `item`, is tagged verify
+ * (ONLY=verify runs just those), and its findings open the report as "Release verification". t.untested(why) records
+ * that the item couldn't be checked now (it needs market hours, a second device, another environment).
  */
 import { globSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BrowserContext, Page } from 'playwright';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { abs, context, guard, host, reach, REFUSED, settle, slices, slug, watch, type Run } from './browser.ts';
+import { abs, context, guard, host, marked, reach, REFUSED, settle, slices, slug, watch, type Mark, type Run } from './browser.ts';
 import { isLocal, type Config } from './config.ts';
 import * as jev from './jev.ts';
 import { EMAIL, VISUAL, YES_IS_DEFECT } from './questions.ts';
-import type { Finding } from './report.ts';
+import { UNTESTED, type Finding } from './report.ts';
 import type { FailRule, Reply, Seen } from './stub.ts';
 
 /** For a flow's own questions to t.jev(), t.ask() and t.mail.judge(), and tapcheck's own sets to start from. */
 export { choice, noul, score } from '@typesafe-ai/sdk';
 export { EMAIL, VISUAL } from './questions.ts';
+export type { Mark, MarkKind } from './browser.ts';
 /**
  * timeout: seconds the whole flow may take (default 3600); past it the flow fails and the run goes on.
  * serial: with `parallel` above 1, this flow runs alone, after the flows before it end and before the ones after it start
  * (for a flow that changes data the others read, stub rules or the whole Mailpit inbox).
+ * item: the release item this flow verifies, in the release note's words; it makes the flow a verify flow.
  */
-export type Flow = { name: string; side?: string; timeout?: number; serial?: boolean; run: (t: T) => Promise<void> };
+export type Flow = { name: string; side?: string; timeout?: number; serial?: boolean; item?: string; run: (t: T) => Promise<void> };
 /** A flow as loaded: its side settled and its part name. */
-export type Loaded = Required<Flow> & { part: string };
+export type Loaded = Required<Omit<Flow, 'item'>> & { item?: string; part: string };
 /** One message in Mailpit. headers: every header by name, as Mailpit spells it ("List-Unsubscribe"), each with its values. */
 export type Mail = { id: string; subject: string; from: string; to: string[]; html: string; text: string; links: string[]; headers: Record<string, string[]> };
 
@@ -78,7 +93,7 @@ export class T {
     /** The run's folder, for files of the flow's own (a payload log, a list it made). */
     get dir(): string { return this.r.dir; }
 
-    private record(f: Omit<Finding, 'side'>) { if (this.live()) this.r.record(f); }
+    private record(f: Omit<Finding, 'side'>) { if (this.live()) this.r.record(this.flow.item ? { ...f, item: this.flow.item } : f); }
     private live() { return !this.dead || inCleanup.getStore()?.on === true; }
 
     /** Stops the flow at its timeout: later findings are dropped and `t.signal` is aborted. */
@@ -211,6 +226,25 @@ export class T {
     note(name: string, detail: string, status: 'warn' | 'info' | 'fail' = 'warn'): void {
         this.alive();
         this.record({ suite: this.flow.part, where: this.flow.name, check: name, status, detail });
+    }
+
+    /**
+     * A finding the flow decided, with a marked screenshot of the current page as its evidence when marks are on (MARK=1
+     * or `marks: true`): the banner says `check` and `detail`, each mark boxes its target with its note. A pass is drawn
+     * only on a run ONLY or CHANGED scoped and in a verify flow; without marks on it is t.note with a status.
+     */
+    async mark(check: string, status: Finding['status'], marks: Mark[], detail?: string): Promise<void> {
+        this.alive();
+        const page = this.current;
+        const draw = this.r.cfg.marks && page && !page.isClosed() && (status !== 'pass' || this.r.scoped || !!this.flow.item);
+        const shot = draw ? await marked(this.r, page, `${this.flow.part} ${check}`, { status, title: check, detail }, marks) : undefined;
+        this.record({ suite: this.flow.part, where: this.flow.name, check, status, detail, evidence: shot ? [shot] : undefined });
+    }
+
+    /** A verify flow's item couldn't be checked in this run, and why: it is listed under "Not tested", neither passed nor failed. */
+    untested(why: string): void {
+        this.alive();
+        this.record({ suite: this.flow.part, where: this.flow.name, check: UNTESTED, status: 'info', detail: why });
     }
 
     /** Records that Jev's look at `label` was skipped, and why. */
@@ -439,9 +473,10 @@ export async function loadFlows(cfg: Config): Promise<Loaded[]> {
             if (!cfg.sides.some((s) => s.name === side)) throw new Error(`${file}: side "${side}" isn't in sides (${cfg.sides.map((s) => s.name).join(', ')}).`);
             if (f.timeout !== undefined && !(Number.isFinite(f.timeout) && f.timeout > 0)) throw new Error(`${file}: timeout must be a number of seconds above 0.`);
             if (f.serial !== undefined && typeof f.serial !== 'boolean') throw new Error(`${file}: serial must be true or false.`);
+            if (f.item !== undefined && (typeof f.item !== 'string' || !f.item.trim())) throw new Error(`${file}: item must be the release item this flow verifies, as text.`);
             const part = `flow-${slug(f.name).replace(/_/g, '-')}`;
             if (out.some((o) => o.part === part)) throw new Error(`${file}: another flow is already called "${f.name}" (part ${part}).`);
-            out.push({ name: f.name, side, timeout: f.timeout ?? 3600, serial: f.serial ?? false, run: f.run, part });
+            out.push({ name: f.name, side, timeout: f.timeout ?? 3600, serial: f.serial ?? false, item: f.item, run: f.run, part });
         }
     }
     return out;
