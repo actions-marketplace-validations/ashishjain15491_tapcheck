@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 (2026-11-26)
 
 - **Hash-routed apps.** A screen at `/#scanner` or `/#/orders` is its own page: it is loaded afresh (so it has an
   HTTP status, not 0), the crawl keeps it apart from `/` and follows `#/route` links, and `interact` and `audit` treat

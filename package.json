@@ -1,6 +1,6 @@
 {
     "name": "@ashishjain15491/tapcheck",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "End-to-end and UI audit harness for any web app, whatever its stack: crawl, API contract, security, accessibility, and Jev judgments of what people see.",
     "license": "MIT",
     "author": "ashishjain15491 (https://github.com/ashishjain15491)",
