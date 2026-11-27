@@ -186,7 +186,16 @@ button over a control on a page with no room to scroll is. Jev looks at an opene
 once its content has loaded. Dark-mode contrast lists only what fails in dark and not in light. The focus ring is
 checked on Tab stops from the top and from the main content. Overlap and target size measure 300 controls a screen,
 those in the window first, and an info row says when there were more. The consistency checks leave out card-sized
-buttons, page numbers and data shown as labels (with figures, long, or one of a list of rows).
+buttons, page numbers and data shown as labels (with figures, long, or one of a list of rows). Each consistency
+finding's evidence is an image (`consistency-*.png`) with an example of each look, cut out of the screen it was first
+seen on, its swatches and how often it is used.
+
+When Jev says a screen has a visual fault (cut off, overlap, out of line, an error, a raw key), it also boxes where, on
+the first screenshot of the evidence (`*-where-*.png`), with marks on or off. What tapcheck measured as each slice was
+taken settles some of them: a cut at the end of a row that scrolls sideways or on text shortened with "…" passes, one
+under a small control fixed over the page (a chat button) is a warning, and on a menu or dialog a cut at the edge of
+tapcheck's cut-out of it is a warning, since the crop may have made it. A menu whose items' text starts within 2 px of
+each other passes "out of line" when Jev is unsure.
 
 `max` adds that many pages from the crawl (the crawl has to be in the same run: `ONLY=crawl,audit`);
 `skip` is a regular expression of paths to leave out, for pages that are a canvas or an editor. It opens only the
@@ -411,7 +420,7 @@ markers and notes are placed so they cover no other marker or note, and no other
 | `crawl` | form fields without a label, images that don't load |
 | `interact` | a control that did nothing (on the first screen it is dead on), raised an error, set off a 5xx or opened a native dialog, when it is still on the screen |
 | flows | whatever `t.mark` names |
-| what Jev judged (`ux`, `usability`, `audit`'s look, `t.jev`), a failed flow step | the banner alone, on the screenshot that was judged: Jev says what is wrong, not where |
+| what Jev judged (`ux`, `usability`, `audit`'s look, `t.jev`), a failed flow step | the banner alone, on the screenshot that was judged; a failing visual check also gets Jev's box of where (see `audit` above) |
 
 The built-in suites mark only failures and warnings. A pass from `t.mark` gets its screenshot only on a run that
 `ONLY` or `CHANGED` scoped, and in a verify flow; on a full run it is recorded without one, so a full audit stays

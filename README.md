@@ -39,7 +39,8 @@ Everything runs on desktop, tablet and phone sizes by default. An app built for 
 `[desktop, tablet]`, `[mobile]`), and the sizes it isn't built for are left out of every suite.
 
 `MARK=1` puts a marked screenshot first in each failing or warning finding: a banner saying the check, and a numbered
-box and a note on each element at fault. To check a release or a pull request item by item, the `tapcheck-verify` skill
+box and a note on each element at fault. A Jev finding says its question and the answer in words, and a failing visual
+check is boxed where Jev places it, marks or not. To check a release or a pull request item by item, the `tapcheck-verify` skill
 writes a flow per item, and the report opens with "Release verification": what passed, failed or wasn't tested.
 
 ## Install
