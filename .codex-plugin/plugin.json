@@ -1,6 +1,6 @@
 {
     "name": "tapcheck",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "description": "End-to-end and UI audit for any web app, whatever its stack. Skills set tapcheck up for your project, run it, fix what it finds, and verify a release item by item.",
     "author": {
         "name": "ashishjain15491",

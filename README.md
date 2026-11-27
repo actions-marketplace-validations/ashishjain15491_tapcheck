@@ -72,7 +72,7 @@ npm install --save-dev tapcheck@npm:@ashishjain15491/tapcheck
 npx playwright install chromium     # once
 ```
 
-Or run it without installing: `npx @ashishjain15491/tapcheck@0.1.4`.
+Or run it without installing: `npx @ashishjain15491/tapcheck@0.1.5`.
 
 **GitHub Action** and **Docker**: see [Run it](#3-run-it) below.
 
@@ -157,7 +157,7 @@ uploads the run folder and fails the step when a check fails; inputs are in [act
 - uses: actions/checkout@v4
   with: { fetch-depth: 0 }            # for changed: base
 # …install your app's language, dependencies and a test database…
-- uses: ashishjain15491/tapcheck@v0.1.4
+- uses: ashishjain15491/tapcheck@v0.1.5
   with:
     changed: base                     # optional: only what the pull request changed
   env:

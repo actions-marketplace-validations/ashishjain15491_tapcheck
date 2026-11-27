@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 (2026-11-27)
+
+A report you can find your way in and findings that say what is wrong, checked against a real app: suite cards
+that filter the report, Jev's answers in words with the fault boxed, examples of each look for the consistency
+checks, and fewer false results on menus, sideways rows, help buttons and accepted findings.
 
 - **Consistency findings show the looks.** Each of `audit`'s findings across the screens (one size and radius per
   kind of control, its colours, label case) has an image as its evidence: a row per look with an example cut out of
