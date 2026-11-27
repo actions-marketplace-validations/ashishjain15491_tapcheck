@@ -222,6 +222,30 @@ test('report: failures first, counts per suite, REPORT.md', () => {
     assert.ok(html.includes('id="q"') && html.includes('split(/\\s+/)'), 'the search box, and its regex survives the template');
 });
 
+test('report: a marked screenshot first, with a plain ↔ marked swap and a lightbox; REPORT.md unchanged', () => {
+    const dir = mkdtempSync(`${tmpdir()}/tapcheck-test-`), s = `${dir}/public/shots`;
+    findings.length = 0;
+    record({ suite: 'audit', side: 'public', where: 'Home', check: 'text fits', status: 'fail', evidence: [`${s}/audit-home.png`, `${s}/marked-1-home.png`, `${s}/audit.json`] });
+    record({ suite: 'ux', side: 'public', where: 'Home', check: 'visual: clipped', status: 'fail', evidence: [`${s}/ux-home-where-clipped.png`, `${s}/ux-home.png`] });
+    record({ suite: 'audit', side: 'public', where: 'Cart', check: 'overlap', status: 'warn', evidence: [`${s}/marked-2-cart.png`] });
+    record({ suite: 'audit', side: 'public', where: 'Shop', check: 'radius', status: 'warn', evidence: [`${s}/consistency-radius.png`] });
+    write(dir, { base: 'http://localhost', started: Date.now() });
+    const html = readFileSync(`${dir}/report.html`, 'utf8');
+    const rows = html.split('<tr ').slice(1);
+    const row = (where: string, check: string) => rows.find((r) => r.includes(`<td>${where}</td><td>${check}</td>`))!;
+    // The marked one first, swapping with the first plain PNG; the button is hidden until the script shows it.
+    assert.match(row('Home', 'text fits'), /<span class="pm"><a href="public\/shots\/marked-1-home\.png"[^>]*><img src="public\/shots\/marked-1-home\.png"[^>]*data-marked="public\/shots\/marked-1-home\.png" data-plain="public\/shots\/audit-home\.png"><\/a><button type="button" class="swap" hidden/);
+    assert.ok(row('Home', 'text fits').indexOf('marked-1-home') < row('Home', 'text fits').indexOf('audit-home.png">'), 'marked before plain');
+    assert.match(row('Home', 'visual: clipped'), /data-marked="public\/shots\/ux-home-where-clipped\.png" data-plain="public\/shots\/ux-home\.png"/);
+    // No plain one to swap with, or nothing marked: no button.
+    assert.ok(!row('Cart', 'overlap').includes('class="swap"') && row('Cart', 'overlap').includes('marked-2-cart.png'));
+    assert.ok(!row('Shop', 'radius').includes('class="swap"'));
+    // The lightbox, and the links still work without the script.
+    assert.ok(html.includes('<dialog id="lb"') && html.includes('lb.showModal()') && html.includes('target="_blank"'));
+    const md = readFileSync(`${dir}/REPORT.md`, 'utf8');
+    assert.ok(!md.includes('swap') && !md.includes('<'), md);
+});
+
 test('session guard: LOGIN=1 is suggested on a manual side only', () => {
     const run = (login: unknown) => ({ cfg: check({ baseUrl: 'http://127.0.0.1:1' }), side: { name: 'staff', login } }) as unknown as Run;
     const landed = 'http://127.0.0.1:1/login';

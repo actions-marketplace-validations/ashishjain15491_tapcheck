@@ -183,7 +183,8 @@ screenshots, `ONLY=verify` for the release flows, `DEVICES=desktop` for some kin
 <img alt="A tapcheck report: one card per suite, then each finding with its evidence" src="https://raw.githubusercontent.com/ashishjain15491/tapcheck/main/assets/report.png">
 
 Each run writes `.tapcheck/run-<time>/` (git-ignore it): `report.html` (click a suite's card to see only its rows;
-`report.html#suite=usability` links there; the search box finds a screen or check), `REPORT.md` for a pull request (failures,
+`report.html#suite=usability` links there; the search box finds a screen or check; a marked screenshot has a
+"plain ↔ marked" button, and a click opens a screenshot large), `REPORT.md` for a pull request (failures,
 warnings, skipped parts and the `expect:` matches), `findings.json` for tools and agents, and the screenshots and
 evidence. The exit code is 0 when no check fails, 1 when
 one does, and 2 when the run couldn't start.

@@ -27,6 +27,7 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const ORDER = { fail: 0, warn: 1, info: 2, pass: 3 } as const;
 const cell = (s: string) => s.replace(/[\\|]/g, '\\$&').replace(/\s+/g, ' '); // a backslash first, so `a\|b` stays one cell
 const isExpected = (f: Finding) => f.status === 'info' && !!f.detail?.startsWith('expected:');
+const MARKED = /(^|\/)marked-[^/]*\.png$|-where-[^/]*\.png$/;
 const png = (f: Finding) => f.evidence?.find((e) => /\.png$/.test(e));
 
 /**
@@ -87,8 +88,17 @@ export function write(dir: string, meta: { base: string; started: number; note?:
     const ev = (e: string) => (/\.png$/.test(e)
         ? ` <a href="${esc(rel(e))}" target="_blank" rel="noopener"><img src="${esc(rel(e))}" alt="evidence" loading="lazy"></a>`
         : ` <a href="${esc(rel(e))}">${esc(rel(e))}</a>`);
+    // A marked or Jev-boxed screenshot goes first, with a button (shown by the script) that swaps it with the plain one.
+    const evidence = (f: Finding) => {
+        const all = f.evidence ?? [], mk = all.find((e) => MARKED.test(e)), plain = all.find((e) => /\.png$/.test(e) && !MARKED.test(e));
+        if (!mk) return all.map(ev).join('');
+        const rest = all.filter((e) => e !== mk).map(ev).join('');
+        if (!plain) return ev(mk) + rest;
+        return ` <span class="pm"><a href="${esc(rel(mk))}" target="_blank" rel="noopener"><img src="${esc(rel(mk))}" alt="evidence" loading="lazy" data-marked="${esc(rel(mk))}" data-plain="${esc(rel(plain))}"></a>`
+            + `<button type="button" class="swap" hidden title="Swap the marked and the plain screenshot">plain ↔ marked</button></span>${rest}`;
+    };
     const row = (f: Finding) => `<tr class="${f.status}" data-s="${esc(key(f))}"><td><span class="tag ${f.status}">${f.status}</span></td><td>${esc(key(f))}</td><td>${esc(f.where)}</td>`
-        + `<td>${esc(f.check)}</td><td>${esc(f.detail ?? '')}${(f.evidence ?? []).map(ev).join('')}</td></tr>`;
+        + `<td>${esc(f.check)}</td><td>${esc(f.detail ?? '')}${evidence(f)}</td></tr>`;
     const verify = verification(rel, ev);
     const recs = (meta.recordings ?? []).filter((r) => r.videos.length || r.trace);
     const recorded = recs.length ? `<h2>Recordings</h2><p class="meta">A video per browser page, and a trace of every action with the page as it was: open one with the command next to it.</p><ul>${recs.map((r) =>
@@ -109,12 +119,14 @@ tr.out,tr.miss{display:none}p.totals{margin:-12px 0 16px;font-weight:600}#q{bord
 .wrap{overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid var(--line)}th{font-size:12px;color:var(--mut);text-transform:uppercase}
 td img,li img{max-width:120px;max-height:80px;border:1px solid var(--line);border-radius:4px;vertical-align:middle;margin:2px}
 .tag{font-size:11px;font-weight:700;text-transform:uppercase;padding:2px 6px;border-radius:4px;border:1px solid currentColor}.tag.fail{color:var(--fail)}.tag.warn{color:var(--warn)}.tag.pass{color:var(--pass)}.tag.info{color:var(--info)}
+.pm{display:inline-flex;flex-direction:column;align-items:flex-start;vertical-align:middle}.swap{font:inherit;font-size:11px;border:1px solid var(--line);border-radius:999px;padding:0 8px;background:none;color:inherit;cursor:pointer}.swap[hidden]{display:none}
+#lb{border:0;padding:0;background:none;max-width:96vw;max-height:96vh}#lb::backdrop{background:rgb(0 0 0/.8)}#lb img{display:block;max-width:96vw;max-height:96vh;cursor:zoom-out}
 body:has(#hp:not(:checked)) tr.pass{display:none}body:has(#hw:not(:checked)) tr.warn{display:none}body:has(#hi:not(:checked)) tr.info{display:none}
 </style></head><body><main><h1>tapcheck report</h1><p class="meta">${esc(meta.base)} · ${when} · ${mins} min${meta.note ? ` · ${esc(meta.note)}` : ''}</p>${totals}${verify ? `${verify.html}<h2>Every check</h2>` : ''}
 <div class="cards">${bySuite.map((b) => `<button type="button" class="card" data-s="${esc(b.s)}" title="Show only ${esc(b.s)}"><b>${esc(b.s)}</b><span class="n ${b.fail ? 'f' : b.skipped || b.empty ? 'w' : 'p'}">${b.fail ? `${b.fail} failing` : b.skipped ? 'skipped' : b.empty ? 'nothing checked' : 'clean'}</span><br><span><span class="w">${b.warn} warn</span> · <span class="p">${b.pass} pass</span> · ${b.total} checks</span></button>`).join('')}</div>
 <div class="filters"><label><input type="checkbox" id="hw" checked> warnings</label><label><input type="checkbox" id="hi" checked> info</label><label><input type="checkbox" id="hp"> passes</label><button type="button" id="only" hidden></button><input type="search" id="q" placeholder="Search screens, checks, details" aria-label="Search the findings"></div>
 <div class="wrap"><table><thead><tr><th>Status</th><th>Suite</th><th>Where</th><th>Check</th><th>Detail and evidence</th></tr></thead><tbody>${sorted.map(row).join('')}</tbody></table></div><p id="none" hidden>No rows match. Clear the search or the suite, or tick passes.</p>${recorded}
-<p class="meta">Raw evidence: findings.json, payloads.json (every Jev request), code.json (the gates' output), and per side crawl.json, network.json, missed-routes.json, axe.json, interact.json, audit.json, clickstream.json and hits.json (what each part reached, for COVERAGE=1).</p></main><script>
+<p class="meta">Raw evidence: findings.json, payloads.json (every Jev request), code.json (the gates' output), and per side crawl.json, network.json, missed-routes.json, axe.json, interact.json, audit.json, clickstream.json and hits.json (what each part reached, for COVERAGE=1).</p></main><dialog id="lb" aria-label="Screenshot"><img alt="The screenshot, large"></dialog><script>
 // A suite card shows that suite's rows only (#suite=<name> in the address, so it can be linked); again, or the chip, shows all.
 const only = document.getElementById('only'), table = document.querySelector('.wrap');
 function show(s, scroll) {
@@ -138,6 +150,22 @@ q.addEventListener('input', () => {
 document.querySelectorAll('.filters input[type=checkbox], button.card, #only').forEach((c) => c.addEventListener('click', () => setTimeout(seen)));
 const at = /^#suite=(.+)$/.exec(location.hash);
 if (at) show(decodeURIComponent(at[1]), true);
+// plain ↔ marked swaps a finding's first screenshot (and its link) between the marked and the plain one.
+document.querySelectorAll('.swap').forEach((b) => {
+    b.hidden = false;
+    b.addEventListener('click', () => {
+        const img = b.parentElement.querySelector('img'), to = img.getAttribute('src') === img.dataset.marked ? img.dataset.plain : img.dataset.marked;
+        img.src = to; img.parentElement.href = to;
+    });
+});
+// A screenshot opens large in the page; Esc or a click closes it.
+const lb = document.getElementById('lb'), big = lb.querySelector('img');
+document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a');
+    if (!a || !a.querySelector('img') || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault(); big.src = a.href; lb.showModal();
+});
+lb.addEventListener('click', () => lb.close());
 </script></body></html>`;
     writeFileSync(`${dir}/report.html`, html);
 

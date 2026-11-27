@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Plain or marked, and large, in report.html.** A finding with a marked or Jev-boxed screenshot shows it first with a
+  "plain ↔ marked" button that swaps it with the plain screenshot and back, and a screenshot opens large in the page
+  (Esc or a click closes it). Without JavaScript the images and links work as before; REPORT.md is unchanged.
+
 ## 0.1.5 (2026-11-27)
 
 A report you can find your way in and findings that say what is wrong, checked against a real app: suite cards
