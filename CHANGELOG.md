@@ -1,14 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 (2026-11-27)
+
+Test only the devices an app is built for, and fixes from reviewing a long run on a real app, for false alarms and
+for what the run didn't see.
 
 - **Only the devices the app is for.** `devices` in `tapcheck.yml` (or `DEVICES=desktop,tablet` for one run) picks
   `desktop`, `tablet` and `mobile`, default all. The viewports of the others and `audit`'s 768 px tablet or 375 px phone
   are left out, so an app not built for a phone gets no phone findings. Without a desktop, `audit`'s full pass (dark
   mode, Jev's look, menus and dialogs) runs on the first chosen size.
-
-Fixes from reviewing a long run on a real app, for false alarms and for what the run didn't see.
-
 - **The app's API on another subdomain is the app's.** `contract` checks calls to every host of the app's site
   (`api.example.com` for an app at `app.example.com`), each named with its host, and `interact`'s "no 5xx" check
   counts them too; `security` doesn't call them third-party. A name on a shared host (`my-app.vercel.app`) stands alone.
