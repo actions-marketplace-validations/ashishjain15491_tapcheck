@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Consistency findings show the looks.** Each of `audit`'s findings across the screens (one size and radius per
+  kind of control, its colours, label case) has an image as its evidence: a row per look with an example cut out of
+  the screen it was first seen on, the look in words, swatches for its colours and how often it is used, most used
+  first. A crop that came out blank says so.
 - **Jump to a suite in report.html.** Each suite card shows only that suite's rows (click again, or the chip, for all),
   and the address gets `#suite=<name>` so a link opens the report there; the filters stay at the top while scrolling.
 - **Search and totals in report.html.** A search box in the filter bar keeps the rows with all its words (screen,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -52,6 +52,16 @@ test('audit: button sizes, cut-off text, a white background in dark mode, token 
     const at = (where: string, check: string) => { const f = found.find((x) => x.where === where && x.check === check); return `${f?.status}: ${f?.detail ?? ''}`; };
     const all = 'all audited screens';
     assert.match(at(all, 'consistency: one size and radius per button'), /^warn: 2 look\(s\).*×2 \(Add plant, More\).*60 px high, radius 7 px.*\(Buy now\)/);
+    // Each look is shown: an example of each cut out of its screen, on one sheet that is the finding's evidence.
+    const looksSheet = found.find((x) => x.check === 'consistency: one size and radius per button')!.evidence;
+    assert.deepEqual(looksSheet, [`${tmp}/shots/consistency-button-looks.png`]);
+    assert.ok(readFileSync(looksSheet![0]).readUInt32BE(20) > 100, 'a sheet with a row per look');
+    // An example that came out blank says so instead of showing an empty box.
+    const blank = `${tmp}/blank.png`, ok = `${tmp}/shots/look-1.png`;
+    const { chromium } = await import('playwright');
+    const b = await chromium.launch(); const p = await b.newPage({ viewport: { width: 60, height: 30 } }); await p.screenshot({ path: blank }); await b.close();
+    const sheetFile = await audit.sheet(`${tmp}/sheet.png`, 'test', [{ file: blank, text: 'blank' }, { file: ok, text: 'ok' }]);
+    assert.ok(sheetFile && existsSync(sheetFile));
     assert.match(at('Home · desktop', 'text is not cut off'), /^fail: 1: "A very long line/);
     assert.match(at('Home · dark', 'dark mode: no background left white'), /^fail: .*div\.card/);
     assert.match(at('Home · dark', 'dark mode: text contrast (axe)'), /^fail: /);

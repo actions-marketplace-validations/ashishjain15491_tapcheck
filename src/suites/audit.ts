@@ -20,10 +20,10 @@
  * It only opens menus and dialogs and closes them with Escape: never a control whose label is one of the usability
  * suite's UNSAFE words, never a submit button. audit.json holds everything found.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import { device, mainViewport, type Config } from '../config.ts';
-import { context, hashRoute, itemStarts, marked, open, resolve, SessionExpired, settle, slices, slug, type Run, type Viewport } from '../browser.ts';
+import { context, hashRoute, itemStarts, launch, marked, open, resolve, SessionExpired, settle, slices, slug, type Run, type Viewport } from '../browser.ts';
 import { ask, BudgetReached, img, looked, whyOff } from '../jev.ts';
 import { POPUP_VISUAL, VISUAL } from '../questions.ts';
 import { AXE, toMain } from './a11y.ts';
@@ -58,6 +58,44 @@ export async function popupShot(page: Page, file: string): Promise<string | unde
 const POPUP = '[role=menu], [role=listbox], dialog[open], [role=dialog], [role=alertdialog], [popover]:popover-open';
 // ponytail: primary, secondary and danger is the most a button kind gets before its colours count as inconsistent; fields get one.
 const PAINTS: Record<string, number> = { button: 3, 'icon button': 3, 'text button': 2 };
+const EXAMPLES = 150; // controls and labels cut out of their screens, for the consistency findings' example sheets
+const SHEET_ROWS = 8;
+
+/**
+ * One image for a finding across the screens: a row per look, each with an example cut out of its screen, what the
+ * look is, and the swatches of the colours it names. Written to `file`; undefined when no row has an example.
+ */
+export async function sheet(file: string, title: string, rows: { file?: string; text: string; at?: string }[]) {
+    const shown = rows.filter((x) => x.file && existsSync(x.file)).slice(0, SHEET_ROWS);
+    if (!shown.length) return undefined;
+    const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+    const swatches = (t: string) => (t.match(/(rgba?|color)\([^)]*\)/g) ?? []).map((c) => `<i style="display:inline-block;width:14px;height:14px;border:1px solid #999;border-radius:3px;vertical-align:-2px;margin:0 2px;background:${c}"></i>`).join('');
+    const more = rows.length - shown.length;
+    const page = await (await launch()).newPage({ viewport: { width: 960, height: 200 } });
+    try {
+        await page.setContent(`<body style="margin:0;background:#fff;font:14px/1.4 system-ui,sans-serif;color:#111"><div style="padding:10px 16px;background:#b45309;color:#fff;font-weight:600">${esc(title)}</div>`
+            + shown.map((x, i) => `<div style="display:flex;gap:16px;align-items:center;padding:10px 16px;border-bottom:1px solid #e5e7eb"><b style="width:20px">${i + 1}</b>`
+                + `<div style="width:320px;display:flex;justify-content:center;background:repeating-conic-gradient(#f3f4f6 0 25%,#fff 0 50%) 0 0/12px 12px;padding:6px;border-radius:4px"><img style="max-width:308px;max-height:90px" src="data:image/png;base64,${readFileSync(x.file!).toString('base64')}"></div>`
+                + `<div style="flex:1">${esc(x.text)}${swatches(x.text) ? `<div style="margin-top:4px">${swatches(x.text)}</div>` : ''}${x.at ? `<div style="color:#6b7280">first on ${esc(x.at)}</div>` : ''}</div></div>`).join('')
+            + (more > 0 ? `<div style="padding:8px 16px;color:#6b7280">+${more} more, listed in the finding and in audit.json</div>` : '') + '</body>');
+        // An example that came out as one flat colour (the control was moving or covered when it was cut out) says so.
+        await page.evaluate(async () => {
+            for (const im of [...document.images]) {
+                await im.decode().catch(() => {});
+                const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight;
+                const g = c.getContext('2d')!; g.drawImage(im, 0, 0);
+                const d = g.getImageData(0, 0, c.width, c.height).data;
+                let flat = true;
+                for (let i = 4; i < d.length && flat; i += 4) if (Math.abs(d[i] - d[0]) + Math.abs(d[i + 1] - d[1]) + Math.abs(d[i + 2] - d[2]) > 24) flat = false;
+                if (flat) im.replaceWith(Object.assign(document.createElement('span'), { textContent: 'no example: it was blank when cut out', style: 'color:#6b7280;font-size:12px' }));
+            }
+        });
+        await page.screenshot({ path: file, fullPage: true });
+        return file;
+    } finally {
+        await page.close();
+    }
+}
 
 type Item = { kind: string; shape: string; paint: string; label: string };
 
@@ -161,6 +199,8 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
 
     const items: Item[] = [], labels: string[] = [], off: [string, string, string][] = [];
     if (!extras) return { problems, items, labels, off, capped };
+    // Each control and label measured is tagged with its index, so an example of each look can be cut out of the page.
+    document.querySelectorAll('[data-tapcheck-item], [data-tapcheck-say]').forEach((e) => { e.removeAttribute('data-tapcheck-item'); e.removeAttribute('data-tapcheck-say'); });
 
     // Placeholders that reached the screen: a value that printed as undefined, NaN or [object Object], or an unfilled template.
     const leaked = new Set<string>();
@@ -184,7 +224,7 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
         return rects.some((a) => a.width > 0 && rects.some((b) => b.width > 0 && b.top >= a.bottom - 1));
     };
     // A label is wording the app chose: not data (a digit, a price, a percentage) and not a sentence or a headline (over five words).
-    const say = (l: string) => { if (!/[\d$€£¥₹%]/.test(l) && l.split(/\s+/).length <= 5) labels.push(l); };
+    const say = (l: string, el: Element) => { if (!/[\d$€£¥₹%]/.test(l) && l.split(/\s+/).length <= 5) { el.setAttribute('data-tapcheck-say', String(labels.length)); labels.push(l); } };
     for (const el of all) {
         const tag = el.tagName.toLowerCase(), f = el as HTMLInputElement;
         const button = el.matches('button, input[type=submit], input[type=button], input[type=reset], [role=button]') && !el.matches('[role=tab], [role=menuitem], [role=switch], :disabled, [aria-disabled=true]');
@@ -204,13 +244,14 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
         if (button && (r.height > 64 || /^\d+$/.test(label) || lines(el))) continue;
         const bare = s.backgroundColor === 'rgba(0, 0, 0, 0)' && !parseFloat(s.borderTopWidth);
         const kind = field ? (tag === 'input' ? 'text input' : tag) : !label ? 'icon button' : bare ? 'text button' : 'button';
+        box.setAttribute('data-tapcheck-item', String(items.length));
         items.push({ kind, label, shape: `${kind === 'textarea' ? '' : `${Math.round(r.height)} px high, `}radius ${px(b.borderTopLeftRadius)} px, ${px(s.fontSize)} px text`,
             paint: `${s.color} on ${b.backgroundColor}, ${parseFloat(b.borderTopWidth) ? `border ${b.borderTopColor}` : 'no border'}` });
         // A button among three or more of its kind side by side is a row of data (a list of events, of tickers), not a label.
         const row = (e: Element) => (e.closest('li') ?? e).parentElement, like = (e: Element) => e.tagName === el.tagName && e.className === el.className;
-        if (button && label && [...(row(el)?.querySelectorAll(tag) ?? [])].filter((e) => row(e) === row(el) && like(e)).length < 3) say(label);
+        if (button && label && [...(row(el)?.querySelectorAll(tag) ?? [])].filter((e) => row(e) === row(el) && like(e)).length < 3) say(label, el);
     }
-    for (const h of [...heads, ...root.querySelectorAll('[role=tab]')]) if (visible(h) && txt(h)) say(txt(h));
+    for (const h of [...heads, ...root.querySelectorAll('[role=tab]')]) if (visible(h) && txt(h)) say(txt(h), h);
 
     if (design) {
         // Any CSS colour as sRGB bytes, by painting it; null when it is fully transparent.
@@ -301,6 +342,15 @@ export async function run(r: Run) {
     const skip = r.cfg.audit.skip;
     const out = { screens: [] as { name: string; path: string; views: Record<string, Record<string, string[]>> }[], components: {} as Record<string, unknown>, labelCase: {} as Record<string, string[]>, tokens: {} as Record<string, unknown> };
     const looks = new Map<string, Map<string, { n: number; labels: Set<string>; paints: Set<string> }>>(); // kind → shape → where it is used
+    // The first control seen of each look and colour scheme of a kind, and of each label: cut out of its screen, for the
+    // consistency findings' evidence. ponytail: at most EXAMPLES of each, the rest are counted, not shown.
+    const examples = new Map<string, { file: string; at: string }>();
+    const example = async (page: Page, key: string, selector: string, at: string) => {
+        if (examples.has(key) || examples.size >= EXAMPLES) return;
+        const file = `${r.dir}/shots/look-${examples.size + 1}.png`;
+        examples.set(key, { file, at });
+        await page.locator(selector).first().screenshot({ path: file, timeout: 2000, animations: 'disabled' }).catch(() => examples.delete(key));
+    };
     const labels = new Set<string>();
     const outside = new Map<string, Map<string, { n: number; at: string }>>(); // token list → value → uses
 
@@ -351,6 +401,12 @@ export async function run(r: Run) {
         };
         const dim = new Set(await contrast()); // failing in light mode already: the a11y suite's finding, not dark mode's
         const m = await page.evaluate(measure, { extras: true, design: r.cfg.design });
+        for (const [i, it] of m.items.entries()) {
+            await example(page, `${it.kind}|${it.shape}`, `[data-tapcheck-item="${i}"]`, t.name);
+            await example(page, `${it.kind}|${it.paint}`, `[data-tapcheck-item="${i}"]`, t.name);
+        }
+        for (const [i, l] of m.labels.entries()) await example(page, `label|${l}`, `[data-tapcheck-say="${i}"]`, t.name);
+        await page.evaluate(() => scrollTo(0, 0));
         for (const it of m.items) {
             const shapes = looks.get(it.kind) ?? looks.set(it.kind, new Map()).get(it.kind)!;
             const use = shapes.get(it.shape) ?? shapes.set(it.shape, { n: 0, labels: new Set(), paints: new Set() }).get(it.shape)!;
@@ -474,9 +530,15 @@ export async function run(r: Run) {
     for (const [kind, shapes] of looks) {
         const by = [...shapes].sort((a, b) => b[1].n - a[1].n);
         const paints = new Set(by.flatMap(([, u]) => [...u.paints]));
-        r.record({ suite: S, where: across, check: `consistency: one size and radius per ${kind}`, status: by.length > 1 ? 'warn' : 'pass',
-            detail: `${by.length} look(s): ${by.slice(0, 4).map(([shape, u]) => `${shape} ×${u.n}${u.labels.size ? ` (${[...u.labels].join(', ')})` : ''}`).join('; ')}` });
-        r.record({ suite: S, where: across, check: `consistency: ${kind} colours`, status: paints.size > (PAINTS[kind] ?? 1) ? 'warn' : 'pass', detail: `${paints.size} colour scheme(s): ${[...paints].slice(0, 4).join('; ')}` });
+        const shapesOff = by.length > 1, paintsOff = paints.size > (PAINTS[kind] ?? 1);
+        const ex = (key: string) => examples.get(`${kind}|${key}`);
+        const shapeSheet = shapesOff ? await sheet(`${r.dir}/shots/consistency-${slug(kind)}-looks.png`, `${kind}: ${by.length} looks, most used first`,
+            by.map(([shape, u]) => ({ file: ex(shape)?.file, at: ex(shape)?.at, text: `${shape} · ×${u.n}${u.labels.size ? ` · ${[...u.labels].join(', ')}` : ''}` }))) : undefined;
+        const paintSheet = paintsOff ? await sheet(`${r.dir}/shots/consistency-${slug(kind)}-colours.png`, `${kind}: ${paints.size} colour schemes`,
+            [...paints].map((p) => ({ file: ex(p)?.file, at: ex(p)?.at, text: p }))) : undefined;
+        r.record({ suite: S, where: across, check: `consistency: one size and radius per ${kind}`, status: shapesOff ? 'warn' : 'pass',
+            detail: `${by.length} look(s): ${by.slice(0, 4).map(([shape, u]) => `${shape} ×${u.n}${u.labels.size ? ` (${[...u.labels].join(', ')})` : ''}`).join('; ')}`, evidence: shapeSheet ? [shapeSheet] : undefined });
+        r.record({ suite: S, where: across, check: `consistency: ${kind} colours`, status: paintsOff ? 'warn' : 'pass', detail: `${paints.size} colour scheme(s): ${[...paints].slice(0, 4).join('; ')}`, evidence: paintSheet ? [paintSheet] : undefined });
         out.components[kind] = by.map(([shape, u]) => ({ shape, uses: u.n, labels: [...u.labels], colours: [...u.paints] }));
     }
     // Label case: Title Case needs two capitalised words after the first, sentence case none; names and one-word labels count as neither.
@@ -485,8 +547,13 @@ export async function run(r: Run) {
     const caps = (l: string) => rest(l).filter((w) => /^[A-Z][a-z]/.test(w)).length;
     const title = [...labels].filter((l) => rest(l).length >= 2 && caps(l) >= 2 && caps(l) / rest(l).length > 0.6), sentence = [...labels].filter((l) => rest(l).length >= 1 && caps(l) === 0);
     const odd = title.length && sentence.length ? (title.length <= sentence.length ? title : sentence) : [];
+    // The labels in the less used case, and one of the other for comparison, each as it shows on its screen.
+    const other = (odd === title ? sentence : title).slice(0, 1);
+    const caseSheet = odd.length ? await sheet(`${r.dir}/shots/consistency-label-case.png`, `labels: ${title.length} in Title Case, ${sentence.length} in sentence case`,
+        [...odd.map((l) => ({ l, how: odd === title ? 'Title Case (the fewer)' : 'sentence case (the fewer)' })), ...other.map((l) => ({ l, how: odd === title ? 'sentence case, as most are' : 'Title Case, as most are' }))]
+            .map(({ l, how }) => ({ file: examples.get(`label|${l}`)?.file, at: examples.get(`label|${l}`)?.at, text: `"${l}" · ${how}` }))) : undefined;
     r.record({ suite: S, where: across, check: 'labels use one case', status: odd.length ? 'warn' : 'pass',
-        detail: odd.length ? `${title.length} in Title Case, ${sentence.length} in sentence case; the fewer: ${odd.slice(0, 6).map((l) => `"${l}"`).join(', ')}` : undefined });
+        detail: odd.length ? `${title.length} in Title Case, ${sentence.length} in sentence case; the fewer: ${odd.slice(0, 6).map((l) => `"${l}"`).join(', ')}` : undefined, evidence: caseSheet ? [caseSheet] : undefined });
     out.labelCase = { title, sentence };
     for (const [list, word] of [['colors', 'colours'], ['fonts', 'fonts'], ['radii', 'radii'], ['spacing', 'spacing']] as const) {
         if (!r.cfg.design?.[list]) continue;
