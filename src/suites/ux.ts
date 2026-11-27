@@ -8,7 +8,8 @@
  * - heuristic evaluation: the usability heuristics a screenshot can show;
  * - guerrilla five-second test on the first screen: does a passer-by get the screen's job, and pick it among the others;
  * - predicted attention (desktop): the first three places the eye goes and the main CTA as Jev boxes, drawn as a heatmap,
- *   with code checking that the CTA is among the first three looks. These are predictions, not eye-tracking data;
+ *   with code checking that the CTA is among the first three looks. These are predictions, not eye-tracking data, so a
+ *   miss is a warning at most;
  * - raw translation keys, measured: visible text that is exactly one of the keys the i18n.keys command prints, or an
  *   unfilled :placeholder.
  * Jev judges, code decides: an unsure answer is a warning for a person to look at, never a pass.
@@ -18,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import type { Screen } from '../config.ts';
 import { abs, context, facts, open, resolve, SessionExpired, slices, slug, watch, type Run } from '../browser.ts';
-import { ask, bad, BudgetReached, good, img, looked, MIN_SCORE, NO, scoreStatus, status, to10 } from '../jev.ts';
+import { ask, bad, BudgetReached, FAIL_SCORE, good, img, looked, MIN_SCORE, NO, scoreStatus, status, to10 } from '../jev.ts';
 import { ATTENTION, ATTENTION_CHECK, ATTENTION_MODEL, DESIGN, guerrilla, HEURISTICS, purposeKey, VISUAL } from '../questions.ts';
 
 const S = 'ux';
@@ -27,11 +28,16 @@ const MAX_TEXT_COVERAGE = 0.32;
 
 // A low score Jev was split on is a question for a person, not a defect: it is marked "needs review" (a warning).
 const REVIEW_BELOW = 0.3;
-function scored(r: Run, where: string, check: string, a: { score: number; confidence: number }, ev: string[]) {
+// Level 2 of the trust and h8_minimalist scales ("acceptable but plain", "some parts could go without loss") describes a
+// screen with nothing wrong, and a working product's screens sit there, so for those two it passes: 5.5, where to10 puts
+// level 2. Level 1 ("rough", "several parts add nothing") is the defect and still fails at 3.3: the fail mark is 4.4,
+// halfway between the two levels, so a score nearer level 1 fails and one just short of level 2 is a warning.
+const PLAIN_PASSES = { pass: 5.5, fail: 4.4 };
+function scored(r: Run, where: string, check: string, a: { score: number; confidence: number }, ev: string[], marks = { pass: MIN_SCORE, fail: FAIL_SCORE }) {
     const v = to10(a.score);
-    const review = v < MIN_SCORE && a.confidence < REVIEW_BELOW;
-    r.record({ suite: S, where, check, status: scoreStatus(v, a.confidence, REVIEW_BELOW),
-        detail: `${v}/10 (confidence ${a.confidence.toFixed(2)})${review ? ' · needs review: Jev was split' : ''}`, evidence: ev });
+    const review = v < marks.pass && a.confidence < REVIEW_BELOW;
+    r.record({ suite: S, where, check, status: scoreStatus(v, a.confidence, REVIEW_BELOW, marks.pass, marks.fail),
+        detail: `${v}/10 (confidence ${a.confidence.toFixed(2)})${marks.pass === MIN_SCORE ? '' : ` · passes from ${marks.pass}`}${review ? ' · needs review: Jev was split' : ''}`, evidence: ev });
 }
 
 /**
@@ -52,6 +58,23 @@ function same(a: Box, b: Box) {
     return (w * h) / Math.max(1e-6, Math.min(area(a), area(b))) > 0.5;
 }
 
+/**
+ * Where each look's label goes, in pixels: above its box's top left corner, and a row lower at a time while it would
+ * cover a label already placed (looks often land on the same element).
+ * ponytail: the width is estimated at 7 px a letter; measure in the page if labels grow past a few words.
+ */
+export function labelSpots(looks: { label: string; box: Box }[], width: number, height: number) {
+    const placed: { x: number; y: number; w: number }[] = [];
+    for (const [i, l] of looks.entries()) {
+        const w = `${i + 1}. ${l.label}`.length * 7 + 12;
+        const x = Math.max(0, Math.min(l.box.left * width - 2, width - w));
+        let y = Math.max(0, l.box.top * height - 22);
+        while (placed.some((p) => Math.abs(p.y - y) < 22 && x < p.x + p.w && p.x < x + w)) y += 22;
+        placed.push({ x, y, w });
+    }
+    return placed;
+}
+
 /** The screenshot with the predicted looks as a heat overlay and numbered boxes, rendered by the browser itself. */
 async function heatmap(page: Page, shot: string, looks: { label: string; box: Box; weight: number; colour: string }[], out: string) {
     const { width, height } = page.viewportSize()!;
@@ -61,9 +84,10 @@ async function heatmap(page: Page, shot: string, looks: { label: string; box: Bo
         const r = Math.max(8, ((l.box.right - l.box.left + l.box.bottom - l.box.top) / 2) * 100);
         return `radial-gradient(circle at ${cx}% ${cy}%, rgba(255,0,0,${0.55 * l.weight}) 0, rgba(255,140,0,${0.3 * l.weight}) ${r * 0.6}%, transparent ${r}%)`;
     }).join(',');
+    const spots = labelSpots(looks, width, height);
     const frames = looks.map((l, i) => `<div style="position:absolute;left:${l.box.left * 100}%;top:${l.box.top * 100}%;width:${(l.box.right - l.box.left) * 100}%;`
-        + `height:${(l.box.bottom - l.box.top) * 100}%;border:2px solid ${l.colour};border-radius:4px"><b style="position:absolute;top:-22px;left:-2px;`
-        + `background:${l.colour};color:#fff;font:12px system-ui;padding:2px 6px;border-radius:4px;white-space:nowrap">${i + 1}. ${l.label}</b></div>`).join('');
+        + `height:${(l.box.bottom - l.box.top) * 100}%;border:2px solid ${l.colour};border-radius:4px"></div><b style="position:absolute;left:${spots[i].x}px;top:${spots[i].y}px;`
+        + `background:${l.colour};color:#fff;font:12px system-ui;padding:2px 6px;border-radius:4px;white-space:nowrap">${i + 1}. ${l.label}</b>`).join('');
     const p = await page.context().newPage();
     await p.setViewportSize({ width, height });
     await p.setContent(`<body style="margin:0"><div style="position:relative;width:${width}px;height:${height}px;background:url(${src}) 0 0/100% 100%">`
@@ -138,7 +162,7 @@ export async function run(r: Run) {
                     }
                     const probs = Object.entries(a.density.probabilities ?? {}).map(([k, p]) => `${k} ${(p as number).toFixed(2)}`).join(', ');
                     r.record({ suite: S, where, check: 'design: density', status: a.density.choice === 'balanced' ? 'pass' : 'warn', detail: `${a.density.choice} (${probs})`, evidence: [shots[0]] });
-                    for (const k of ['h1_status', 'h2_language', 'h4_consistency', 'h6_recognition', 'h8_minimalist'] as const) scored(r, where, `heuristic: ${k}`, a[k], shots);
+                    for (const k of ['h1_status', 'h2_language', 'h4_consistency', 'h6_recognition', 'h8_minimalist'] as const) scored(r, where, `heuristic: ${k}`, a[k], shots, k === 'h8_minimalist' ? PLAIN_PASSES : undefined);
                     r.record({ suite: S, where, check: 'heuristic: h10_help', status: status(good(a.h10_help.noul)), detail: `p=${a.h10_help.noul.toFixed(2)}`, evidence: shots });
 
                     // Guerrilla five-second test, on the first screen only. It needs the screen's purpose; picking the job
@@ -152,14 +176,15 @@ export async function run(r: Run) {
                             const picked = g.purpose_pick.choice === purposeKey(s.purpose);
                             r.record({ suite: S, where, check: 'guerrilla: right job picked', status: picked ? 'pass' : 'fail', detail: picked ? undefined : `read as "${g.purpose_pick.choice}"`, evidence: [shots[0]] });
                         }
-                        scored(r, where, 'guerrilla: trust', g.trust, [shots[0]]);
+                        scored(r, where, 'guerrilla: trust', g.trust, [shots[0]], PLAIN_PASSES);
                     } else {
                         r.record({ suite: S, where, check: 'guerrilla five-second test', status: 'info', detail: 'skipped: give the screen a purpose in tapcheck.yml to run it' });
                     }
 
                     // Predicted attention, desktop only.
                     if (!vp.mobile) {
-                        const c = await ask(`${key}-cta-check`, { screenshot: img(shots[0]) }, ATTENTION_CHECK, [shots[0]]);
+                        // The first screen is asked on its own only when there is more below it: of one slice, `a` already said.
+                        const c = shots.length > 1 ? await ask(`${key}-cta-check`, { screenshot: img(shots[0]) }, ATTENTION_CHECK, [shots[0]]) : a;
                         const at = await ask(`${key}-attention`, img(shots[0]), ATTENTION, [shots[0]], ATTENTION_MODEL);
                         const hasCta = good(c.has_cta.noul);
                         const looks = [
@@ -171,8 +196,13 @@ export async function run(r: Run) {
                         const map = `${r.dir}/shots/${key}-heatmap.png`;
                         await heatmap(page, shots[0], looks, map);
                         const seen = hasCta === 'pass' && looks.slice(0, 3).some((l) => same(l.box, at.main_cta.box));
-                        r.record({ suite: S, where, check: 'attention: main CTA among first three looks', status: noCta ? 'info' : hasCta !== 'pass' ? 'warn' : seen ? 'pass' : 'fail',
-                            detail: noCta || (hasCta !== 'pass' ? `no clear main CTA on the first screen (p=${c.has_cta.noul.toFixed(2)})` : seen ? undefined : 'the eye is predicted to land elsewhere first'),
+                        // No main call to action on the whole screen or on its first one is nothing to find. A miss is a
+                        // warning at most: the looks and the CTA's box are Jev's predictions, and a box drawn loosely or
+                        // a look on another way to do the same thing would otherwise fail a screen that works.
+                        const none = noCta || (c.has_cta.noul < NO ? `no main call to action on the first screen (p=${c.has_cta.noul.toFixed(2)})` : '');
+                        r.record({ suite: S, where, check: 'attention: main CTA among first three looks', status: none ? 'info' : seen ? 'pass' : 'warn',
+                            detail: none || (hasCta !== 'pass' ? `no clear main CTA on the first screen (p=${c.has_cta.noul.toFixed(2)})`
+                                : seen ? undefined : 'the eye is predicted to land elsewhere first (a prediction from the screenshot, not a measurement: see the heatmap)'),
                             evidence: [map] });
                     }
                 } catch (e) {

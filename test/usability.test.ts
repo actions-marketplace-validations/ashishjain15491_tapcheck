@@ -20,6 +20,7 @@ main { margin: 100px 0 0 60px } #cover { position: fixed; left: 500px; top: 300p
 <main id="list"></main>
 <button style="position:fixed;left:520px;top:320px">Under a banner</button><div id="cover">banner</div>
 <button style="position:fixed;left:500px;top:200px" onmouseenter="cover.style.top = '180px'">Trap</button>
+<button style="position:fixed;left:300px;top:450px" title="Export list"><svg width="16" height="16"></svg></button>
 </body></html>`;
 
 const seen: any[] = [];
@@ -56,6 +57,16 @@ test('usability: a flyout left open by the pointer covers nothing on the next st
     assert.deepEqual(at('Alerts:', 'task completed'), ['pass', '2 click(s): Menu → Past alerts']);
     assert.deepEqual(at('Alerts:', 'no dead clicks'), ['pass', undefined]);
     assert.ok(!seen.some((q) => q.state.controls?.some((c: string) => /Under a banner/.test(c))), 'a control under something else is never offered');
+    // A control with no words on it is offered as the icon a first-time user sees, not as if its hidden name were its label.
+    const offered = seen.flatMap((q) => q.state.controls ?? []).filter((c: string) => /Export list/.test(c));
+    assert.deepEqual([...new Set(offered)], ['The button that is an icon with no visible text (tooltip "Export list"), in the main area.']);
     assert.match(at('Trap:', 'task completed')[1]!, /^click failed on "Trap": /);
     assert.doesNotMatch(at('Trap:', 'task completed')[1]!, /Call log/);
+});
+
+test('usability: a side with no tasks is a skipped part, not a clean one', async () => {
+    const cfg = check({ baseUrl: 'http://127.0.0.1:1' });
+    const found: Omit<Finding, 'side'>[] = [];
+    await usability.run({ cfg, side: cfg.sides[0], dir: tmpdir(), record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } } as Run);
+    assert.deepEqual(found, [{ suite: 'usability', where: `usability-${cfg.sides[0].name}`, check: 'part ran', status: 'info', detail: 'skipped: no tasks for this side' }]);
 });

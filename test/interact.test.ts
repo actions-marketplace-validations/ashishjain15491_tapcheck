@@ -44,7 +44,8 @@ const tmp = mkdtempSync(`${tmpdir()}/tapcheck-interact-`);
 const asked: string[] = [];
 const server = createServer((req, res) => {
     asked.push(`${req.method} ${req.url}`);
-    res.writeHead(200, { 'content-type': 'text/html' }).end(req.url === '/' ? HOME : req.url === '/form' ? FORM : req.url?.startsWith('/seg') ? SEG
+    res.writeHead(req.url === '/boom' ? 500 : req.url === '/missing' ? 404 : 200, { 'content-type': 'text/html' }).end(req.url === '/' ? HOME : req.url === '/form' ? FORM : req.url?.startsWith('/seg') ? SEG
+        : req.url === '/five' || req.url === '/four' ? `<!doctype html><html lang="en"><title>t</title><body><button onclick="fetch('${req.url === '/five' ? '/boom' : '/missing'}')">Load</button></body></html>`
         : req.url === '/away' ? '<!doctype html><title>away</title><script>console.error("theirs")</script>' : 'ok');
 });
 await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
@@ -105,4 +106,12 @@ test('interact: the selected segment, tab and page are not dead, another site\'s
     assert.ok(asked.includes('GET /away'));
     assert.equal(at('/seg', 'clicks raise no page or console errors')[0], 'pass');
     assert.deepEqual(JSON.parse(readFileSync(`${tmp}/interact.json`, 'utf8')).screens[1].dead, ['Export', 'Closed']);
+});
+
+test('interact: a 5xx of the app fails the 5xx check alone, a 404 still fails as a console error', async () => {
+    const at = await sweep(['/five', '/four']);
+    assert.match(at('/five', 'clicks set off no 5xx').join(), /^fail,"Load" → 500 GET \/boom/);
+    assert.equal(at('/five', 'clicks raise no page or console errors')[0], 'pass');
+    assert.equal(at('/four', 'clicks set off no 5xx')[0], 'pass');
+    assert.match(at('/four', 'clicks raise no page or console errors').join(), /^fail,"Load": Failed to load resource: .* 404/);
 });

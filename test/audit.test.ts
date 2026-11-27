@@ -106,3 +106,67 @@ test('audit: an overlap that scrolling undoes is none, and dark mode is told by 
     assert.equal(at('themed · dark', 'dark mode'), 'undefined: ');
     assert.equal(at('themed · dark', 'dark mode: no background left white'), 'pass: ');
 });
+
+const SHELL: Record<string, string> = {
+    // An app shell: a rail of 25 links, then the main content, whose first button shows no focus ring.
+    '/rail': page(`<nav>${Array.from({ length: 25 }, (_, i) => `<a href="#p${i}">Page ${i}</a>`).join(' ')}</nav><main><button style="outline: none">Quiet</button> <button>Loud</button></main>`),
+    // 400 controls; the two drawn on each other are the last in the page and at the top of the window.
+    '/many': page(`<div style="margin-top: 300px">${Array.from({ length: 398 }, (_, i) => `<button style="height: 30px">B${i}</button>`).join(' ')}</div>
+        <button style="position: absolute; left: 20px; top: 100px; width: 100px; height: 40px">Save</button><button style="position: absolute; left: 40px; top: 110px; width: 100px; height: 40px">Cancel</button>`),
+    // A dialog that shows a placeholder until its content arrives, a second later.
+    '/dialog': page(`<button aria-haspopup="dialog" onclick="box.hidden = false; fetch('/slow').then((x) => x.text()).then((t) => { box.innerHTML = t })">Details</button>
+        <div id="box" role="dialog" aria-label="Details" hidden>Loading…</div>`),
+    '/slow': '<p style="width: 80px; overflow: hidden; white-space: nowrap">A very long line of text that cannot fit in eighty pixels</p>',
+    // One text too faint in both themes, one only in the dark.
+    '/dark': page('<style>@media (prefers-color-scheme: dark) { body { background: #111111; color: #eeeeee } }</style><p id="both" style="background: #ffffff; color: #cccccc">Faint</p><p id="night" style="color: #333333">Night</p>'),
+};
+
+test('audit: Tab starts at the main content, controls in view are measured first, a dialog is judged once loaded, dark mode reports only its own contrast', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-audit-`);
+    const server = createServer((req, res) => { setTimeout(() => res.writeHead(200, { 'content-type': 'text/html' }).end(SHELL[req.url!] ?? ''), req.url === '/slow' ? 1000 : 0); });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    after(async () => { await closeBrowser(); server.close(); });
+    const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }],
+        screens: ['/rail', '/many', '/dialog', '/dark'].map((path) => ({ name: path.slice(1), path })) }, tmp);
+    const found: Omit<Finding, 'side'>[] = [];
+    delete process.env.JEV;
+    setup({ budget: 1, headers: {} }, { systemOne: async ({ questions }) => ({ answers: Object.fromEntries(Object.keys(questions).map((k) => [k, { noul: k === 'loaded' ? 0.9 : 0.1 }])), usage: { input_tokens: 100 } }) });
+    await audit.run({ cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } });
+    const at = (where: string, check: string) => { const f = found.find((x) => x.where === where && x.check === check); return `${f?.status}: ${f?.detail ?? ''}`; };
+
+    assert.equal(at('rail · desktop', 'focus ring on every Tab stop'), 'fail: 1: button "Quiet"');
+    assert.equal(at('many · desktop', 'controls do not overlap'), 'fail: 1: Save ↔ Cancel');
+    assert.equal(at('many · desktop', 'controls measured'), 'info: measured the first 300 of 400 controls, those in the window first');
+    assert.match(at('dialog › Details', 'text is not cut off'), /^fail: 1: "A very long line/);
+    assert.equal(at('dialog › Details', 'visual: loaded'), 'pass: p=0.90');
+    assert.equal(at('dark · dark', 'dark mode: text contrast (axe)'), 'fail: 1: #night');
+});
+
+const LOOKS = page(`<style>
+.wrap { display: inline-block; box-sizing: border-box; height: 40px; padding: 10px; border: 1px solid #111111; border-radius: 8px; background: #ffffff }
+.wrap input, .lone { border: 0; background: transparent; outline: 0; height: 16px; padding: 0 }
+.pg { height: 28px; border-radius: 6px }
+</style>
+<span class="wrap"><input aria-label="Search"></span> <span class="wrap"><input aria-label="Filter"></span> <input class="lone" aria-label="Alone">
+<p><button>Add plant</button> <button>Save changes</button></p> <button>Fern<br>Needs water</button> <button style="height: 80px">Tall</button>
+<nav><button class="pg">1</button> <button class="pg">2</button></nav>
+<ul>${['FOMC Member Williams Speaks', 'Richmond Manufacturing Index', 'New Home Sales'].map((x) => `<li><button class="row">${x}</button></li>`).join('')}</ul>
+<button>LOOP $5.9M · 2 Prints Today</button> <button>Understanding Dark Pool Activity And More</button>`);
+
+test('audit consistency: a field is measured at its wrapper, cards and page numbers are no button look, data is no label', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-audit-`);
+    const server = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }).end(LOOKS); });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    after(async () => { await closeBrowser(); server.close(); });
+    process.env.JEV = 'off';
+    const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }] }, tmp);
+    const found: Omit<Finding, 'side'>[] = [];
+    await audit.run({ cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } });
+    const at = (check: string) => { const f = found.find((x) => x.where === 'all audited screens' && x.check === check); return `${f?.status}: ${f?.detail ?? ''}`; };
+
+    assert.match(at('consistency: one size and radius per text input'), /^pass: 1 look\(s\): 40 px high, radius 8 px, \d+ px text ×2 \(Search, Filter\)$/);
+    assert.match(at('consistency: text input colours'), /^pass: 1 colour scheme\(s\): .* on rgb\(255, 255, 255\), border rgb\(17, 17, 17\)$/);
+    assert.match(at('consistency: one size and radius per button'), /^pass: 1 look\(s\): .* ×7 \(Add plant, Save changes, /);
+    assert.equal(at('labels use one case'), 'pass: ');
+    assert.deepEqual(JSON.parse(readFileSync(`${tmp}/audit.json`, 'utf8')).labelCase, { title: [], sentence: ['Add plant', 'Save changes'] });
+});

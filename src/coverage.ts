@@ -33,13 +33,14 @@ export function coverage(all: Reach[], runs: number, routes: Route[], reasons: C
         out.push('## Routes', '', '| Route | Reached by |', '|---|---|');
         for (const key of [...new Set(routes.map((r) => `${r.method} ${r.path}`))].sort((a, b) => a.split(' ')[1].localeCompare(b.split(' ')[1]) || a.localeCompare(b))) {
             const [method, path] = key.split(' '), re = matcher(path);
-            const w = by((what) => what.startsWith(`${method} `) && re.test(what.slice(method.length + 1)));
+            // A request to another host of the app's site is filed with its host (GET api.example.com/orders); the route list names none.
+            const w = by((what) => what.startsWith(`${method} `) && re.test(what.slice(method.length + 1).replace(/^[^/]+(?=\/)/, '')));
             const why = w.length ? undefined : reasons.find((r) => r.match.test(key))?.why;
             if (w.length) covered++; else if (why) excused++; else gaps.push(key);
             out.push(`| \`${cell(key)}\` | ${w.length ? who(w) : why ? `GAP: ${cell(why)}` : '**GAP**'} |`);
         }
     } else {
-        const reached = kind('').filter((row) => /^\| [A-Z]+ \//.test(row));
+        const reached = kind('').filter((row) => /^\| [A-Z]+ ([a-z0-9.-]+(:\d+)?)?\//i.test(row));
         out.push('## Reached', '', 'tapcheck.yml has no `routes` command, so there is no route list to find gaps in. These requests were answered:', '', '| Request | Reached by |', '|---|---|', ...reached);
     }
     for (const [prefix, title, head] of [['dialog ', 'Dialogs', 'Dialog'], ['table ', 'Table controls', 'Table: control']]) {

@@ -2,7 +2,7 @@
  * Interaction sweep (measured, no Jev). On each screen the crawl reached (at most interact.max), on the first
  * desktop-sized viewport:
  * - clicks every safe visible control (buttons, tabs, disclosures, in-app links) and checks that nothing breaks: no page
- *   or console error, no 5xx from the app, no native alert/confirm/prompt, and that the click did something (the DOM or
+ *   or console error (the browser's console line about a 5xx of the app aside: that is the next check), no 5xx from the app, no native alert/confirm/prompt, and that the click did something (the DOM or
  *   the address changed, a request went out, something opened); a control that does nothing is a warning, reported once
  *   per run with the screens it is on. The one already selected (aria-selected, aria-pressed, aria-checked, aria-current,
  *   or the segment that does something once a neighbour was clicked) has nothing to do and is not counted;
@@ -201,7 +201,9 @@ export async function run(r: Run) {
             const broke: string[] = [], failed: string[] = [], native: string[] = [], dead: string[] = [], clicked: string[] = [];
             const who = { broke: [] as string[], failed: [] as string[], native: [] as string[] }; // the labels behind those lists, for a marked screenshot
             const drain = (label: string) => {
-                if (seen.errors.length) { broke.push(`"${label}": ${seen.errors[0].slice(0, 120)}`); who.broke.push(label); }
+                // The browser's own console line for a 5xx of the app is the same failure as the 5xx: it is counted once, there.
+                const errors = seen.bad.length ? seen.errors.filter((e) => !/Failed to load resource: the server responded with a status of 5\d\d/.test(e)) : seen.errors;
+                if (errors.length) { broke.push(`"${label}": ${errors[0].slice(0, 120)}`); who.broke.push(label); }
                 if (seen.bad.length) { failed.push(`"${label}" → ${seen.bad[0]}`); who.failed.push(label); }
                 if (seen.natives.length) { native.push(`"${label}": ${seen.natives[0]}`); who.native.push(label); }
                 clear();

@@ -2,15 +2,18 @@
  * Full UI audit, per screen (the configured screens, plus up to audit.max crawled pages; paths matching audit.skip are
  * left out). Measured by code; Jev only adds its look.
  * - desktop, light: text cut off or shortened with no way to read it, controls that overlap (and can't be scrolled
- *   apart, as a floating button and the page under it can), targets under 24 px, leaked placeholders, heading levels,
- *   images without alt text, the focus ring on each Tab stop; every menu and dialog the screen's markup says it opens
- *   (aria-haspopup, aria-expanded, popovertarget) is opened and measured the same way, plus whether it fits on the screen;
+ *   apart, as a floating button and the page under it can), targets under 24 px (of at most 300 controls, those in the
+ *   window first), leaked placeholders, heading levels, images without alt text, the focus ring on each Tab stop (a few
+ *   from the top, then from the start of the main content); every menu and dialog the screen's markup says it opens
+ *   (aria-haspopup, aria-expanded, popovertarget) is opened and, once it has loaded, measured the same way, plus
+ *   whether it fits on the screen;
  * - desktop, dark (prefers-color-scheme: dark): axe's colour-contrast rule, which also catches text that became
- *   invisible, and backgrounds that stayed white. A page whose own colours and large surfaces don't react to the colour
- *   scheme is one info finding;
+ *   invisible (only what passes in light mode: the rest is the a11y suite's), and backgrounds that stayed white. A page
+ *   whose own colours and large surfaces don't react to the colour scheme is one info finding;
  * - tablet (768 px) and phone (375 px): sideways scroll, cut-off text, overlap, small targets;
- * - across the screens: buttons and fields of one kind that come in several sizes, radii or colours, labels in Title
- *   Case next to labels in sentence case, and, with `design:` in tapcheck.yml, computed colours, fonts, radii and
+ * - across the screens: buttons and fields of one kind that come in several sizes, radii or colours (a field drawn by
+ *   its wrapper is measured there; cards that are buttons and page numbers are left out), labels in Title Case next to
+ *   labels in sentence case (not data: digits, prices, rows of a list), and, with `design:` in tapcheck.yml, computed colours, fonts, radii and
  *   spacing that are not among the tokens (warnings, the most used offenders first);
  * - Jev's look, when Jev is on: the VISUAL questions (src/questions.ts) about the desktop screen and about each opened
  *   menu and dialog, within the run's budget. With JEV=off or no key that is one info finding and the rest still runs.
@@ -20,10 +23,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import type { Config } from '../config.ts';
-import { context, hashRoute, marked, open, resolve, SessionExpired, slices, slug, type Run, type Viewport } from '../browser.ts';
+import { context, hashRoute, marked, open, resolve, SessionExpired, settle, slices, slug, type Run, type Viewport } from '../browser.ts';
 import { ask, BudgetReached, img, looked, whyOff } from '../jev.ts';
 import { VISUAL } from '../questions.ts';
-import { AXE } from './a11y.ts';
+import { AXE, toMain } from './a11y.ts';
 import { UNSAFE } from './usability.ts';
 import { visual } from './ux.ts';
 
@@ -33,7 +36,7 @@ const WARN = new Set(['shortened text can be read in full', 'heading levels in o
 // The checks that know their elements: measure() tags each with data-tapcheck-mark-<this> (its value the element's note), for a marked screenshot.
 const MARKS: Record<string, string> = { 'no sideways scroll': 'wide', 'text is not cut off': 'cut', 'shortened text can be read in full': 'short', 'controls do not overlap': 'overlap',
     'targets at least 24 px': 'small', 'images have alt text': 'alt' };
-const TABS = 20, MAX_POPUPS = 4;
+const TABS = 20, TOP = 5, MAX_POPUPS = 4;
 
 /**
  * The opened menu or dialog ([data-tapcheck-popup]) cut out of the screen, at least 280 px a side (the least Jev takes),
@@ -109,14 +112,17 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
         }
         return { left: l, top: t, right: rt, bottom: b, width: Math.max(0, rt - l), height: Math.max(0, b - t) };
     };
-    const controls = all.filter((e) => e.matches('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=tab], [role=switch]')).slice(0, 300)
+    const inView = (el: Element) => { const s = seen(el); return Math.max(0, Math.min(s.right, vw) - Math.max(s.left, 0)) * Math.max(0, Math.min(s.bottom, vh) - Math.max(s.top, 0)); };
+    // At most 300 controls are measured: those in the window first, then the rest as the page orders them.
+    const every = all.filter((e) => e.matches('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=tab], [role=switch]'));
+    const capped = every.length > 300 ? `measured the first 300 of ${every.length} controls, those in the window first` : '';
+    const controls = (capped ? every.map((el) => ({ el, on: inView(el) > 0 })).sort((a, b) => +b.on - +a.on).map((c) => c.el) : every).slice(0, 300)
         .map((el) => ({ el, box: seen(el) })).filter((c) => c.box.width > 1 && c.box.height > 1);
     type Box = ReturnType<typeof seen>;
     const over = (a: Box, b: Box) => {
         const w = Math.min(a.right, b.right) - Math.max(a.left, b.left), h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
         return w > 4 && h > 4 && w * h > 0.25 * Math.min(a.width * a.height, b.width * b.height);
     };
-    const inView = (el: Element) => { const s = seen(el); return Math.max(0, Math.min(s.right, vw) - Math.max(s.left, 0)) * Math.max(0, Math.min(s.bottom, vh) - Math.max(s.top, 0)); };
     // Whether a person can scroll `m` clear of `o`: a floating button over a long page, an arrow over the row it scrolls.
     // Each thing around `m` that scrolls (the page last) is scrolled for real, just far enough each way, and put back.
     // Clear means the two no longer overlap and `m` is no less in view; when both move together, or there is no room
@@ -154,7 +160,7 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
     Object.assign(problems, { 'text is not cut off': [...cut], 'shortened text can be read in full': [...short], 'controls do not overlap': [...overlap], 'targets at least 24 px': [...small] });
 
     const items: Item[] = [], labels: string[] = [], off: [string, string, string][] = [];
-    if (!extras) return { problems, items, labels, off };
+    if (!extras) return { problems, items, labels, off, capped };
 
     // Placeholders that reached the screen: a value that printed as undefined, NaN or [object Object], or an unfilled template.
     const leaked = new Set<string>();
@@ -170,20 +176,41 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
     problems['images have alt text'] = [...root.querySelectorAll('img')].filter((i) => visible(i) && !i.hasAttribute('alt') && !i.getAttribute('aria-label')).map((i) => { mark(i, 'alt', 'no alt text'); return i.src.slice(-60); });
 
     // Controls by kind, with the look that should be the same wherever the kind is used.
+    const plain = (e: Element) => { const s = getComputedStyle(e); return s.backgroundColor === 'rgba(0, 0, 0, 0)' && !parseFloat(s.borderTopWidth) && !parseFloat(s.borderBottomWidth); };
+    /** Whether the element's text is on more than one line. */
+    const lines = (e: Element) => {
+        const range = document.createRange(), rects: DOMRect[] = [], walk = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
+        for (let n = walk.nextNode(); n; n = walk.nextNode()) { range.selectNodeContents(n); rects.push(...range.getClientRects()); }
+        return rects.some((a) => a.width > 0 && rects.some((b) => b.width > 0 && b.top >= a.bottom - 1));
+    };
+    // A label is wording the app chose: not data (a digit, a price, a percentage) and not a sentence or a headline (over five words).
+    const say = (l: string) => { if (!/[\d$€£¥₹%]/.test(l) && l.split(/\s+/).length <= 5) labels.push(l); };
     for (const el of all) {
         const tag = el.tagName.toLowerCase(), f = el as HTMLInputElement;
         const button = el.matches('button, input[type=submit], input[type=button], input[type=reset], [role=button]') && !el.matches('[role=tab], [role=menuitem], [role=switch], :disabled, [aria-disabled=true]');
         const field = tag === 'select' || tag === 'textarea' || (tag === 'input' && ['text', 'email', 'url', 'tel', 'number', 'password', 'search', 'date'].includes(f.type));
         if (!button && !field) continue;
-        const s = getComputedStyle(el), r = el.getBoundingClientRect();
         const label = field ? (f.labels?.[0] ? txt(f.labels[0]) : name(el)) : txt(el) || (tag === 'input' ? f.value : '');
+        // A field with no background or border of its own is drawn by a wrapper: the nearest of three ancestors that has
+        // one, holds no other field and isn't far larger (a card or toolbar around it) is measured. With none the field is left out.
+        let box: Element | null = el;
+        for (let n = 0; field && box && plain(box); n++) {
+            const up: Element | null = n < 3 ? box.parentElement : null;
+            box = up && up.querySelectorAll('input:not([type=hidden]), select, textarea').length === 1 && up.clientWidth <= 2 * el.clientWidth + 48 && up.clientHeight <= 4 * el.clientHeight ? up : null;
+        }
+        if (!box) continue;
+        const s = getComputedStyle(el), b = getComputedStyle(box), r = box.getBoundingClientRect();
+        // Not one of a kind with the rest: a card that is a button (over 64 px high, or text on several lines) and a page number.
+        if (button && (r.height > 64 || /^\d+$/.test(label) || lines(el))) continue;
         const bare = s.backgroundColor === 'rgba(0, 0, 0, 0)' && !parseFloat(s.borderTopWidth);
         const kind = field ? (tag === 'input' ? 'text input' : tag) : !label ? 'icon button' : bare ? 'text button' : 'button';
-        items.push({ kind, label, shape: `${kind === 'textarea' ? '' : `${Math.round(r.height)} px high, `}radius ${px(s.borderTopLeftRadius)} px, ${px(s.fontSize)} px text`,
-            paint: `${s.color} on ${s.backgroundColor}, ${parseFloat(s.borderTopWidth) ? `border ${s.borderTopColor}` : 'no border'}` });
-        if (button && label) labels.push(label);
+        items.push({ kind, label, shape: `${kind === 'textarea' ? '' : `${Math.round(r.height)} px high, `}radius ${px(b.borderTopLeftRadius)} px, ${px(s.fontSize)} px text`,
+            paint: `${s.color} on ${b.backgroundColor}, ${parseFloat(b.borderTopWidth) ? `border ${b.borderTopColor}` : 'no border'}` });
+        // A button among three or more of its kind side by side is a row of data (a list of events, of tickers), not a label.
+        const row = (e: Element) => (e.closest('li') ?? e).parentElement, like = (e: Element) => e.tagName === el.tagName && e.className === el.className;
+        if (button && label && [...(row(el)?.querySelectorAll(tag) ?? [])].filter((e) => row(e) === row(el) && like(e)).length < 3) say(label);
     }
-    for (const h of [...heads, ...root.querySelectorAll('[role=tab]')]) if (visible(h) && txt(h)) labels.push(txt(h));
+    for (const h of [...heads, ...root.querySelectorAll('[role=tab]')]) if (visible(h) && txt(h)) say(txt(h));
 
     if (design) {
         // Any CSS colour as sRGB bytes, by painting it; null when it is fully transparent.
@@ -211,31 +238,42 @@ function measure({ root: rootSel, extras, design }: { root?: string; extras: boo
             if (design.spacing) for (const p of ['paddingTop', 'paddingLeft', 'marginTop', 'marginBottom', 'rowGap', 'columnGap'] as const) { const v = parseFloat(s[p]) || 0; if (v > 0 && !among(design.spacing, v)) off.push(['spacing', `${px(s[p])} px`, desc(el)]); }
         }
     }
-    return { problems, items, labels, off };
+    return { problems, items, labels, off, capped };
 }
 
-/** Tab through the page; returns the stops whose look doesn't change between focused and not. */
+/**
+ * Tab through the page; returns the stops whose look doesn't change between focused and not. With a main element the
+ * run starts at its first control, after a few stops from the top (skip links), so an app's long sidebar isn't all
+ * that is tried; without one it is all from the top.
+ */
 async function noFocusRing(page: Page): Promise<string[]> {
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    const main = await toMain(page, true);
     const stops = new Map<string, { ring: boolean; name: string }>(); // by place: two links may share a label
-    for (let i = 0; i < TABS; i++) {
-        await page.keyboard.press('Tab');
-        const f = await page.evaluate(() => {
-            const el = document.activeElement as HTMLElement | null;
-            if (!el || el === document.body) return null;
-            const chain = [el, el.parentElement, el.parentElement?.parentElement].filter((e): e is HTMLElement => !!e);
-            const look = (e: HTMLElement) => { const s = getComputedStyle(e); return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.borderTopColor, s.borderBottomColor, s.backgroundColor, s.textDecorationLine].join('|'); };
-            // A ring that eases in or out still shows right after blur: compare with transitions off.
-            const saved = chain.map((e) => e.style.transition);
-            chain.forEach((e) => { e.style.transition = 'none'; });
-            const on = chain.map(look); el.blur(); const off = chain.map(look); el.focus({ preventScroll: true });
-            chain.forEach((e, k) => { e.style.transition = saved[k]; });
-            const b = el.getBoundingClientRect();
-            return { ring: on.some((k, j) => k !== off[j]), at: `${Math.round(b.left + scrollX)},${Math.round(b.top + scrollY)}`,
-                name: `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') || el.innerText || (el as HTMLInputElement).placeholder || '').replace(/\s+/g, ' ').trim().slice(0, 30)}"` };
-        });
-        if (!f || stops.has(f.at)) break; // left the page, or came round again
-        stops.set(f.at, f);
+    for (const [fromMain, n] of [[false, main ? TOP : TABS], [true, main ? TABS : 0]] as const) {
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        if (fromMain && n) await toMain(page);
+        const round = new Set<string>();
+        for (let i = 0; i < n; i++) {
+            await page.keyboard.press('Tab');
+            if (!i) await toMain(page, true);
+            const f = await page.evaluate(() => {
+                const el = document.activeElement as HTMLElement | null;
+                if (!el || el === document.body) return null;
+                const chain = [el, el.parentElement, el.parentElement?.parentElement].filter((e): e is HTMLElement => !!e);
+                const look = (e: HTMLElement) => { const s = getComputedStyle(e); return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.borderTopColor, s.borderBottomColor, s.backgroundColor, s.textDecorationLine].join('|'); };
+                // A ring that eases in or out still shows right after blur: compare with transitions off.
+                const saved = chain.map((e) => e.style.transition);
+                chain.forEach((e) => { e.style.transition = 'none'; });
+                const on = chain.map(look); el.blur(); const off = chain.map(look); el.focus({ preventScroll: true });
+                chain.forEach((e, k) => { e.style.transition = saved[k]; });
+                const b = el.getBoundingClientRect();
+                return { ring: on.some((k, j) => k !== off[j]), at: `${Math.round(b.left + scrollX)},${Math.round(b.top + scrollY)}`,
+                    name: `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') || el.innerText || (el as HTMLInputElement).placeholder || '').replace(/\s+/g, ' ').trim().slice(0, 30)}"` };
+            });
+            if (!f || round.has(f.at)) break; // left the page, or came round again
+            round.add(f.at);
+            stops.set(f.at, f);
+        }
     }
     await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); scrollTo(0, 0); });
     return [...new Set([...stops.values()].filter((f) => !f.ring).map((f) => f.name))];
@@ -279,7 +317,8 @@ export async function run(r: Run) {
     };
     /** One finding per measured check; the problems also go to audit.json. With marks on, a check that knows its
      * elements gets a marked screenshot of the page as it was measured (a menu still open, this viewport), put first. */
-    const emit = async (page: Page, screen: (typeof out.screens)[number], view: string, where: string, problems: Record<string, string[]>, shots?: string[]) => {
+    const emit = async (page: Page, screen: (typeof out.screens)[number], view: string, where: string, problems: Record<string, string[]>, shots?: string[], capped?: string) => {
+        if (capped) r.record({ suite: S, where, check: 'controls measured', status: 'info', detail: capped });
         const bad = Object.values(problems).some((l) => l.length);
         const shot = `${r.dir}/shots/audit-${slug(where)}.png`;
         if (bad && !shots) await page.screenshot({ path: shot });
@@ -291,6 +330,7 @@ export async function run(r: Run) {
         screen.views[view] = Object.fromEntries(Object.entries(problems).filter(([, l]) => l.length));
     };
 
+    const pending = new Set<unknown>(); // the desktop page's requests that haven't ended
     async function onDesktop(page: Page, t: (typeof out.screens)[number]) {
         const where = `${t.name} · desktop`, key = `audit-${slug(t.name)}`;
         await open(r, page, t.path);
@@ -302,6 +342,12 @@ export async function run(r: Run) {
             return [...root, ...[...new Set(big.map((el) => getComputedStyle(el).backgroundColor))].sort()].join();
         });
         const light = await colours();
+        const contrast = async () => {
+            await page.addScriptTag({ content: AXE });
+            const axe: any = await page.evaluate(() => (window as any).axe.run(document, { runOnly: { type: 'rule', values: ['color-contrast'] }, resultTypes: ['violations'] }));
+            return axe.violations.flatMap((v: any) => v.nodes.map((n: any) => n.target.join(' '))) as string[];
+        };
+        const dim = new Set(await contrast()); // failing in light mode already: the a11y suite's finding, not dark mode's
         const m = await page.evaluate(measure, { extras: true, design: r.cfg.design });
         for (const it of m.items) {
             const shapes = looks.get(it.kind) ?? looks.set(it.kind, new Map()).get(it.kind)!;
@@ -316,7 +362,7 @@ export async function run(r: Run) {
             use.n++;
         }
         const shots = jevOff ? undefined : await slices(r, page, key, await page.evaluate(() => document.documentElement.scrollHeight), desktop.height);
-        await emit(page, t, 'desktop', where, { ...m.problems, 'focus ring on every Tab stop': await noFocusRing(page) }, shots);
+        await emit(page, t, 'desktop', where, { ...m.problems, 'focus ring on every Tab stop': await noFocusRing(page) }, shots, m.capped);
         if (shots) {
             await look(where, key, { screen: t.name, viewport: `desktop, ${desktop.width} × ${desktop.height} px`, note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined }, VISUAL, shots);
             if (!jevOff) looked.add(`${r.dir} ${t.name}`); // answered, not stopped by the budget
@@ -328,6 +374,7 @@ export async function run(r: Run) {
             if (!label || opened >= MAX_POPUPS) continue;
             const at = (u: string) => (hashRoute(t.path) ? u : u.split('#')[0]); // on a hash-routed screen a new hash is another screen
             const home = at(page.url());
+            pending.clear();
             await page.locator(`[data-tapcheck-opener="${i}"]`).click({ timeout: 2000 }).catch(() => {});
             await page.waitForTimeout(300);
             const found = at(page.url()) === home && await page.evaluate((POPUP) => {
@@ -337,11 +384,16 @@ export async function run(r: Run) {
             }, POPUP);
             if (found) {
                 opened++;
+                // What it opened may still be loading (placeholders, a spinner): judged once the requests the click set off
+                // have ended (3 s at most) and the page is quiet.
+                for (const until = Date.now() + 3000; pending.size && Date.now() < until;) await page.waitForTimeout(100);
+                await Promise.race([settle(page), page.waitForTimeout(1000)]);
                 const at = `${t.name} › ${label}`, shot = `${r.dir}/shots/${key}-popup-${opened}.png`;
                 await page.screenshot({ path: shot });
                 const p = await page.evaluate(measure, { root: '[data-tapcheck-popup]', extras: false });
-                await emit(page, t, `${found} "${label}"`, at, p.problems, [shot]);
-                const { loaded: _, ...questions } = VISUAL; // a menu isn't a screen that loads
+                await emit(page, t, `${found} "${label}"`, at, p.problems, [shot], p.capped);
+                const { loaded: _, ...rest } = VISUAL;
+                const questions = /dialog/.test(found) ? VISUAL : rest; // a dialog loads its content as a screen does; a menu or a list of options doesn't
                 // Jev sees the menu or dialog alone: the page around it is covered on purpose, and isn't what is asked about.
                 const crop = jevOff ? undefined : await popupShot(page, `${r.dir}/shots/${key}-popup-${opened}-alone.png`);
                 await look(at, `${key}-popup-${opened}`, { screen: `${t.name}, after "${label}" was clicked`, viewport: `desktop, ${desktop.width} × ${desktop.height} px`,
@@ -361,9 +413,7 @@ export async function run(r: Run) {
                 r.record({ suite: S, where: `${t.name} · dark`, check: 'dark mode', status: 'info', detail: "skipped: the page looks the same with prefers-color-scheme: dark, so it has no dark mode to check" });
                 return;
             }
-            await page.addScriptTag({ content: AXE });
-            const axe: any = await page.evaluate(() => (window as any).axe.run(document, { runOnly: { type: 'rule', values: ['color-contrast'] }, resultTypes: ['violations'] }));
-            const contrast = axe.violations.flatMap((v: any) => v.nodes.map((n: any) => n.target.join(' ')));
+            const dark = (await contrast()).filter((t) => !dim.has(t));
             // ponytail: reads rgb() colours only; a background written in another colour space (oklch, color()) is not seen.
             const white = await page.evaluate(() => {
                 const hits: Element[] = [];
@@ -374,7 +424,7 @@ export async function run(r: Run) {
                 }
                 return hits.slice(0, 5).map((el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/)[0]}` : ''} (${getComputedStyle(el).backgroundColor})`);
             });
-            await emit(page, t, 'dark', `${t.name} · dark`, { 'dark mode: text contrast (axe)': contrast, 'dark mode: no background left white': white });
+            await emit(page, t, 'dark', `${t.name} · dark`, { 'dark mode: text contrast (axe)': dark, 'dark mode: no background left white': white });
         } finally {
             await page.emulateMedia({ colorScheme: 'light' });
         }
@@ -386,6 +436,7 @@ export async function run(r: Run) {
         const page = await ctx.newPage();
         try {
             if (first) {
+                page.on('request', (q) => pending.add(q)).on('requestfinished', (q) => pending.delete(q)).on('requestfailed', (q) => pending.delete(q));
                 // The screens to audit, then crawled pages up to audit.max; found once, used at every size.
                 const left: string[] = [];
                 const add = (name: string, path: string) => { if (skip?.test(path)) left.push(path); else if (!out.screens.some((x) => x.path === path)) out.screens.push({ name, path, views: {} }); };
@@ -403,7 +454,8 @@ export async function run(r: Run) {
                 try {
                     if (first) { await onDesktop(page, t); continue; }
                     await open(r, page, t.path);
-                    await emit(page, t, vp.name, where, (await page.evaluate(measure, { extras: false })).problems);
+                    const m = await page.evaluate(measure, { extras: false });
+                    await emit(page, t, vp.name, where, m.problems, undefined, m.capped);
                 } catch (e) {
                     if (e instanceof SessionExpired) throw e;
                     r.record({ suite: S, where, check: 'audit ran', status: 'fail', detail: (e as Error).message.slice(0, 200) });

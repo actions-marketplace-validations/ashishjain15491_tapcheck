@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { after, test } from 'node:test';
 import { closeBrowser, type Run } from '../src/browser.ts';
 import { check } from '../src/config.ts';
-import { looked, setup } from '../src/jev.ts';
-import { ATTENTION_CHECK, HEURISTICS, VISUAL } from '../src/questions.ts';
+import { looked, scoreStatus, setup } from '../src/jev.ts';
+import { ATTENTION_CHECK, DESIGN, HEURISTICS, VISUAL } from '../src/questions.ts';
 import type { Finding } from '../src/report.ts';
 import * as ux from '../src/suites/ux.ts';
 
@@ -26,6 +26,57 @@ test('questions: what is not cut off, out of line or unloaded, and wording judge
     assert.equal(levels.match(/users/g)?.length, 5);
     assert.match(levels, /terms this screen's users would not know/);
     assert.match(text(ATTENTION_CHECK.has_cta), /information, filters or navigation/);
+    // Density the product is for and an empty state are balanced; a repeated card action is one action; a decorative
+    // picture and a scrolling panel's fading rows lower neither legibility nor minimalism.
+    assert.match(DESIGN.density.criteria.balanced, /table, chart or map packed because that is what the product is for \(as `product` describes it, when given\) is balanced/);
+    assert.match(DESIGN.density.criteria.balanced, /empty state that asks the person to add or search for something/);
+    assert.match(text(DESIGN.cta), /same action repeated on each card or row of a list is one action/);
+    for (const q of [DESIGN.legibility, HEURISTICS('traders').h8_minimalist]) assert.match(text(q), /decorative picture.*rows fading at a scrolling panel's bottom edge/);
+});
+
+test('ux: labels of looks at one point are stacked, not drawn over each other', () => {
+    const box = { top: 0.5, bottom: 0.6, left: 0.2, right: 0.4 };
+    const spots = ux.labelSpots(['first look', 'second look', 'third look'].map((label) => ({ label, box })), 1000, 600);
+    assert.deepEqual(spots.map((s) => [s.x, s.y]), [[198, 278], [198, 300], [198, 322]]);
+    // A look elsewhere keeps its own corner, and a label at the top or right edge stays in the picture.
+    const [, far, edge] = ux.labelSpots([{ label: 'first look', box }, { label: 'second look', box: { ...box, left: 0.6 } }, { label: 'third look', box: { top: 0, bottom: 0.1, left: 0.99, right: 1 } }], 1000, 600);
+    assert.deepEqual([far.x, far.y, edge.y, edge.x + edge.w], [598, 278, 0, 1000]);
+});
+
+test('ux: plain passes for trust and minimalism, and a missed CTA prediction warns', async () => {
+    // Level 2 of a scale is 5.5: a pass for the two checks whose level 2 is a fine screen, a near miss for the rest.
+    assert.deepEqual([5.5, 5.4, 4.4, 4.3, 3.3].map((v) => scoreStatus(v, 0.9, 0.3, 5.5, 4.4)), ['pass', 'warn', 'warn', 'fail', 'fail']);
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-ux-`);
+    const page = (body: string) => `<!doctype html><html lang="en"><title>Seeds</title><body><h1>Seeds</h1>${body}</body></html>`;
+    const server = createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }).end(page(req.url === '/long' ? '<p style="height:1500px">Rows</p><button>Order seeds</button>' : '<button>Order seeds</button>')); });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    after(async () => { await closeBrowser(); server.close(); });
+    const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }],
+        screens: [{ name: 'Short', path: '/', purpose: 'order seeds' }, { name: 'Long', path: '/long', purpose: 'read the rows' }] });
+    const found: Omit<Finding, 'side'>[] = [];
+    const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } };
+    // A fake Jev: level 2 for every score, the main CTA boxed away from every look, and a main call to action on each
+    // whole screen but none on a first screen asked about on its own.
+    let firstScreenAsks = 0;
+    setup({ budget: 1, headers: {} }, { systemOne: async ({ state, questions }) => {
+        const alone = Object.keys(questions).join() === 'has_cta';
+        if (alone) firstScreenAsks++;
+        return { answers: Object.fromEntries(Object.entries(questions).map(([k, q]) => [k, q.type === 'score' ? { score: 2, confidence: 0.9 }
+            : q.type === 'box' ? { box: k === 'main_cta' ? { top: 0.8, bottom: 0.9, left: 0.6, right: 0.9 } : { top: 0.1, bottom: 0.2, left: 0.1, right: 0.3 }, confidence: 0.8 }
+            : q.type === 'choice' ? { choice: Object.keys(q.criteria)[0], confidence: 0.9, probabilities: {} } : { noul: k === 'loaded' || (k === 'has_cta' && !alone) ? 0.95 : 0.05 }])), usage: { input_tokens: 100 } };
+    } });
+    await ux.run(r);
+
+    const at = (where: string, check: string) => { const f = found.find((x) => x.where === where && x.check === check); return f && `${f.status}: ${f.detail ?? ''}`; };
+    assert.deepEqual(found.filter((f) => f.check === 'audit ran'), []);
+    for (const check of ['guerrilla: trust', 'heuristic: h8_minimalist']) assert.equal(at('Short · desktop', check), 'pass: 5.5/10 (confidence 0.90) · passes from 5.5');
+    assert.equal(at('Short · desktop', 'design: hierarchy'), 'warn: 5.5/10 (confidence 0.90)');
+    // One slice: the whole-screen answer is the first screen's. The looks miss the CTA's box, which is a warning.
+    assert.match(at('Short · desktop', 'attention: main CTA among first three looks')!, /^warn: the eye is predicted to land elsewhere first \(a prediction/);
+    // Three slices: the first screen is asked on its own, and its clear "no" is info though the whole screen has a CTA.
+    assert.equal(at('Long · desktop', 'attention: main CTA among first three looks'), 'info: no main call to action on the first screen (p=0.05)');
+    assert.match(at('Long · desktop', 'design: cta')!, /^warn: 5\.5\/10/);
+    assert.equal(firstScreenAsks, 1);
 });
 
 test('ux: no main call to action is info, audit owns the desktop look and target size', async () => {

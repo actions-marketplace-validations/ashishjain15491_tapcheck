@@ -32,6 +32,10 @@ test('coverage: the hits of every run folder merged against the routes, with rea
     // A backslash or pipe in a name stays inside its cell.
     const odd = coverage([{ part: 'interact-public', what: 'dialog C:\\temp | x' }], 1, [], []);
     assert.ok(odd.md.includes('| C:\\\\temp \\| x |'), odd.md);
+    // A call to the app's API on another host of its site reaches the route, and is listed when there is no route list.
+    const api = [{ part: 'crawl-public', what: 'GET api.shop.com/orders/7' }];
+    assert.ok(coverage(api, 1, parse(JSON.stringify([{ method: 'GET', path: '/orders/{id}' }])), []).md.includes('| `GET /orders/{id}` | crawl-public |'));
+    assert.ok(coverage(api, 1, [], []).md.includes('| GET api.shop.com/orders/7 | crawl-public |'));
     assert.deepEqual(hits(`${out}/nowhere`), { all: [], runs: 0 });
 });
 

@@ -28,6 +28,28 @@ Fixes from reviewing a long run on a real app, for false alarms and for what the
 - **usability** never offers a control something covers, moves the pointer away after each step so a hover menu
   closes, and names the control a failed click was on.
 - **security.** A side whose session isn't in a cookie gets an info, not a cookie-flag warning.
+- **contract.** Latency is 800 ms p95 on the app's host and 2000 ms on its other hosts, and info under 20 calls; the
+  baseline fills itself with endpoints seen for the first time; an endpoint's keys are those of all its responses,
+  read from the whole body; capital-letter path segments (`/strikes/SPY`) are an `{id}`.
+- **crawl.** Load time runs to the load event, not to the network going quiet, so live-data apps measure their load.
+  Two screens that are one page get a "screens are distinct" warning. Hash screens and calls to the site's other
+  hosts count for coverage.
+- **a11y and audit keyboard checks** Tab from the main content as well as the top, so an app shell's menu isn't all
+  they see; a11y's focus-ring check is gone (audit's is stricter).
+- **audit.** Controls in the window are measured first, with an info row past 300; the consistency checks leave out
+  bare fields inside a styled box (the box is measured), card buttons, page numbers and data shown as labels; dialogs
+  are measured once loaded, and Jev asks whether they loaded; dark-mode contrast lists only what fails in dark.
+- **interact.** A 5xx fails "clicks set off no 5xx" only, not the console check as well.
+- **security.** With `signedIn` set, "pages need sign-in" opens the screens without the session and fails a page that
+  still shows it; "API data needs sign-in" (info) lists the app's calls that answer with data signed out; new-tab
+  links are read from the rendered pages.
+- **ux and usability.** Trust and minimalism pass from 5.5; density, legibility, minimalism and the main-action
+  question allow packed data screens, empty states, decorative pictures and one action repeated per card; the
+  attention check warns at most and is info where the first screen has no main action; heatmap labels don't cover
+  each other. usability describes icon-only controls as icons, and a side with no tasks is a skipped part.
+- **Report.** `REPORT.md` lists the `expect:` matches and counts the other info rows; a part that checked nothing says
+  so; what Jev judged gets its banner on each of its first three screenshots. `site()` keeps `api.abc.io` and
+  `app.abc.io` one site (the three-label rule is for `co.uk`-style names only).
 - **The saved session keeps only the sign-in.** Saving the session as each part ends keeps the cookies and the sign-in
   entries of local storage; the rest stays as it was at sign-in, so a filter or tab `interact` changed isn't carried
   into the next part or run.

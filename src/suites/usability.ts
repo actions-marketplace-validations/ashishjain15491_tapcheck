@@ -34,17 +34,18 @@ const place = (c: { x: number; y: number }) => (c.y < 72 ? 'at the top of the sc
 async function options(r: Run, page: Page, vh: number, text: string | undefined, tried: Set<string>) {
     const visible = [];
     for (const h of await page.$$('a[href], button, [role=button], input:not([type=hidden]), select, textarea, summary')) if (await h.isVisible()) visible.push(h);
-    type C = { tag: string; label: string; x: number; y: number; w: number; h: number; submit: boolean; hidden: boolean; covered: boolean; field: boolean; reads: boolean; path: string; typing?: boolean };
+    type C = { tag: string; label: string; icon: boolean; x: number; y: number; w: number; h: number; submit: boolean; hidden: boolean; covered: boolean; field: boolean; reads: boolean; path: string; typing?: boolean };
     const controls: C[] = await Promise.all(visible.map((h) => h.evaluate((el) => {
         const r = el.getBoundingClientRect();
-        const label = ((el as HTMLElement).innerText || el.getAttribute('aria-label') || el.getAttribute('title') || (el as HTMLInputElement).placeholder || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+        const shown = ((el as HTMLElement).innerText || '').trim();
+        const label = (shown || el.getAttribute('aria-label') || el.getAttribute('title') || (el as HTMLInputElement).placeholder || '').replace(/\s+/g, ' ').trim().slice(0, 60);
         const form = (el as HTMLInputElement).form; // also set for a control tied to a form by its form= attribute
         // A form's submit button (an untyped button of a form submits too) would save something, so it is never offered.
         const submit = el.matches('button[type=submit], input[type=submit], input[type=image]') || (el.matches('button:not([type])') && !!form);
         const field = el.matches('textarea, input:not([type]), input[type=text], input[type=search], input[type=email]');
         // Something else is on top at its centre (an open flyout, a sticky bar): a click there would never land.
         const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        return { tag: el.tagName.toLowerCase(), label, x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), submit, hidden: !!el.closest('[aria-hidden=true]'), covered: !!top && !el.contains(top), field, reads: !form || form.method === 'get',
+        return { tag: el.tagName.toLowerCase(), label, icon: !shown && !el.matches('input, select, textarea'), x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), submit, hidden: !!el.closest('[aria-hidden=true]'), covered: !!top && !el.contains(top), field, reads: !form || form.method === 'get',
             path: el instanceof HTMLAnchorElement ? el.pathname : '' };
     })));
     const opts: Record<string, string> = {};
@@ -57,7 +58,8 @@ async function options(r: Run, page: Page, vh: number, text: string | undefined,
         if (opts[k] || tried.has(`${page.url()}|${k}`)) continue;
         opts[k] = c.field
             ? `Type "${text}" into the field labelled "${c.label}", ${place(c)}, and press Enter.`
-            : `The ${c.tag === 'a' ? 'link' : c.tag === 'summary' ? 'expandable section' : c.tag} labelled "${c.label}", ${place(c)}.`;
+            // A control with no words on it is described as what a first-time user sees; its hidden name is what hovering shows.
+            : `The ${c.tag === 'a' ? 'link' : c.tag === 'summary' ? 'expandable section' : c.tag} ${c.icon ? `that is an icon with no visible text (tooltip "${c.label}")` : `labelled "${c.label}"`}, ${place(c)}.`;
         at[k] = { i, c: { ...c, typing: c.field } };
     }
     return { opts, at, visible };
@@ -146,7 +148,8 @@ async function attempt(r: Run, page: Page, t: Task, vh: number) {
 }
 
 export async function run(r: Run) {
-    if (!r.side.tasks.length) { r.record({ suite: S, where: 'tasks', check: 'tasks configured', status: 'info', detail: 'none: add tasks to tapcheck.yml to test them' }); return; }
+    // The check and status of a skipped part, so the report lists it under Skipped instead of counting it as clean.
+    if (!r.side.tasks.length) { r.record({ suite: S, where: `${S}-${r.side.name}`, check: 'part ran', status: 'info', detail: 'skipped: no tasks for this side' }); return; }
     mkdirSync(`${r.dir}/shots`, { recursive: true });
     const vp = r.cfg.viewports.find((v) => !v.mobile) ?? r.cfg.viewports[0];
     const ctx = await context(r, vp);

@@ -21,6 +21,14 @@ test('slices: an app shell whose main panel scrolls is sliced by that panel, and
     assert.deepEqual(seen, [0, 600, 1200]);
     assert.deepEqual(await page.evaluate(() => [document.querySelector('main')!.scrollTop, document.querySelectorAll('[data-tapcheck-slices]').length]), [0, 0]);
 
+    // A document that scrolls a few pixels (a 16 px margin under the shell) is still sliced by its panel, not shown twice.
+    await page.setContent(`<body style="margin:0 0 16px;height:100vh;display:flex">
+        <nav style="width:80px">menu</nav><main style="flex:1;overflow-y:auto">${Array.from({ length: 60 }, (_, i) => `<p style="height:30px;margin:0">row ${i + 1}</p>`).join('')}</main></body>`);
+    seen.length = 0;
+    assert.equal(await page.evaluate(() => document.documentElement.scrollHeight), 616);
+    assert.equal((await slices(r, page, 'nearly', 616, 600)).length, 3);
+    assert.deepEqual(seen, [0, 600, 1200]);
+
     // A page that scrolls itself is sliced by the window, as before.
     await page.setContent(`<body style="margin:0">${Array.from({ length: 40 }, (_, i) => `<p style="height:30px;margin:0">row ${i + 1}</p>`).join('')}</body>`);
     assert.equal((await slices(r, page, 'page', await page.evaluate(() => document.documentElement.scrollHeight), 600)).length, 2);

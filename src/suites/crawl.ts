@@ -1,18 +1,26 @@
 /*
  * End-to-end crawl (measured, no Jev). Breadth-first from the side's screens (or / when none are configured) through every
- * in-app link they show, two levels deep and at most crawl.max pages: each page's status, load time, console and page
+ * in-app link they show, two levels deep and at most crawl.max pages: each page's status, load time (to the load event, not
+ * to the quiet network the crawl then waits for), console and page
  * errors, broken images, links that answer 4xx/5xx, form fields without a label, and every request the page made (kept for
  * the contract and security suites). GET only: links matching crawl.skip (sign out, delete, export…) are never followed.
  * With a `routes` command, the app's parameterless GET routes fill what the links leave of crawl.max (one this side is
  * refused, or that isn't a page, is left out quietly), and "route coverage" says how many GET routes the crawl reached; the rest are listed in
- * missed-routes.json.
+ * missed-routes.json. Two configured screens that land on one address, or show the same title, heading and controls, get
+ * a "screens are distinct" warning: every suite would report that screen's findings twice.
  */
 import { writeFileSync } from 'node:fs';
 import type { Page, Request, Response } from 'playwright';
-import { abs, context, facts, here, host, load, marked, signedIn, watch, type Hit, type Run } from '../browser.ts';
+import { abs, context, facts, here, host, load, marked, reachHash, signedIn, site, watch, type Hit, type Run } from '../browser.ts';
 import { coverage, hasParams, routes } from '../routes.ts';
 
 const SLOW_MS = 3000;
+
+/** The top-level keys of a JSON value, sorted; ['[array]'] for a list, null for anything else. */
+const keysOf = (j: unknown) => (Array.isArray(j) ? ['[array]'] : j && typeof j === 'object' ? Object.keys(j).sort() : null);
+export function shape(body: string): string[] | null {
+    try { return keysOf(JSON.parse(body)); } catch { return null; }
+}
 
 function listen(r: Run, page: Page, current: () => string) {
     const started = new Map<Request, number>();
@@ -27,7 +35,7 @@ function listen(r: Run, page: Page, current: () => string) {
             const body = await res.text().catch(() => null);
             if (body === null || (body === '' && res.status() !== 204 && res.status() < 300 && !res.headers()['content-length'])) return; // unread: the page moved on first
             hit.bytes = body.length;
-            if (/json/.test(ct) && body !== '') { try { JSON.parse(body); hit.json = 'ok'; } catch { hit.json = 'invalid'; } }
+            if (/json/.test(ct) && body !== '') { try { hit.keys = keysOf(JSON.parse(body)) ?? undefined; hit.json = 'ok'; } catch { hit.json = 'invalid'; } }
             hit.body = body.slice(0, 400);
         }
     });
@@ -52,6 +60,7 @@ export async function run(r: Run) {
     const fill = gets.filter((x) => !hasParams(x.path) && !seen.has(x.path) && !(signedOut && x.auth)).map((x) => ({ path: x.path, depth: 0, route: true }));
     let visits = 0;
     const linkStatus = new Map<string, number>();
+    const shown: { path: string; url: string; looks: string }[] = []; // the configured screens opened so far
 
     try {
         while (visits < r.cfg.crawl.max) {
@@ -66,14 +75,28 @@ export async function run(r: Run) {
             let download = false; // a link to a file (a PDF invoice): Playwright downloads it and goto throws
             const res = await load(page, abs(r, path)).catch((e: Error) => { download = /Download is starting/.test(e.message); return null; });
             if (download) continue; // not a page; "in-app links answer" still checks that it answers
+            // The load time is the document's own (Navigation Timing), else the time until `load` fired. The wait for a quiet
+            // network after it lets the page settle and isn't counted: an app with a live feed never goes quiet.
+            await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => {});
+            const waited = Date.now() - t0;
+            const ms = Math.round(await page.evaluate(() => (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined)?.loadEventEnd ?? 0).catch(() => 0)) || waited;
             await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-            const ms = Date.now() - t0;
             const finalPath = here(page.url(), path);
             const st = res?.status() ?? 0;
             // A route from the list that isn't this side's (refused, sent to sign in) or isn't a page (a download): not a finding.
             if (route && (st === 0 || [401, 403, 404, 405].includes(st) || (r.cfg.loginPaths.test(finalPath) && !r.cfg.loginPaths.test(path)))) continue;
             await signedIn(r, page, path);
+            reachHash(r, page, path, st);
             const f = await facts(page).catch(() => null);
+            const screen = depth === 0 && !route ? r.side.screens.find((s) => s.path === path) : undefined;
+            if (screen && f) {
+                // The same screen twice: one address, or one title, main heading and list of controls (a page with no control is left alone).
+                const heading = await page.evaluate(() => document.querySelector('h1')?.textContent?.trim() ?? '').catch(() => '');
+                const now = { path, url: page.url(), looks: f.controls.length ? JSON.stringify([f.title, heading, f.controls.map((c) => c.label)]) : '' };
+                const twin = shown.find((o) => o.url === now.url || (now.looks && o.looks === now.looks));
+                if (twin) r.record({ suite: S, where: path, check: 'screens are distinct', status: 'warn', detail: `"${screen.name}" renders the same as "${r.side.screens.find((s) => s.path === twin.path)!.name}" (${twin.path}): every suite reports its findings twice; drop one from screens` });
+                shown.push(now);
+            }
             const links = [...new Set((f?.controls ?? []).map((c) => c.href).filter((h): h is string => !!h && host(h) === own)
                 .map((h) => { const u = new URL(h); return u.pathname + u.search + (/^#!?\//.test(u.hash) ? u.hash : ''); }))]; // #/orders is a route, #section a place on the page
             r.crawl.pages.push({ path, status: st, finalPath, ms, errors: [...errors], links });
@@ -112,8 +135,9 @@ export async function run(r: Run) {
         detail: broken.length ? broken.slice(0, 10).map(([l, s]) => `${s} ${l}`).join('; ') : `${linkStatus.size} links checked` });
     r.record({ suite: S, where: 'all crawled pages', check: 'crawl coverage', status: 'info', detail: `${r.crawl.pages.length} pages, ${r.crawl.hits.length} requests, cap ${r.cfg.crawl.max}` });
     if (gets.length) {
-        // Reached: every GET on this host that answered 2xx, pages and the requests they made alike.
-        const reached = r.crawl.hits.filter((h) => h.method === 'GET' && host(h.url) === own && h.status >= 200 && h.status < 300).map((h) => new URL(h.url).pathname);
+        // Reached: every GET on this site that answered 2xx, pages and the requests they made alike. The route list names no
+        // host, so a path on the app's API host (api.<domain>) counts as it does on its own.
+        const reached = r.crawl.hits.filter((h) => h.method === 'GET' && site(h.url) === site(r.side.baseUrl) && h.status >= 200 && h.status < 300).map((h) => new URL(h.url).pathname);
         const { total, missed } = coverage(gets, reached);
         writeFileSync(`${r.dir}/missed-routes.json`, JSON.stringify(missed, null, 2));
         r.record({ suite: S, where: 'routes', check: 'route coverage', status: 'info',

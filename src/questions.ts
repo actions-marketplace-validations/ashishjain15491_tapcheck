@@ -59,8 +59,8 @@ export const YES_IS_DEFECT = ['error_shown', 'overlap', 'clipped', 'raw_key', 'm
 
 // ───────────────────────────── VISUAL DESIGN (CTA, negative space, hierarchy, legibility) ─────────────────────────────
 export const DESIGN = {
-    cta: score('How clear is the main action a person can take in `screenshots`?', [
-        'There is no visible main action, or several actions look equally important.',
+    cta: score('How clear is the main action a person can take in `screenshots`? The same action repeated on each card or row of a list is one action, not several.', [
+        'There is no visible main action, or several different actions look equally important.',
         'A main action exists but is easy to miss.',
         'The main action is visible but competes with other actions.',
         'The main action is clear, with a little competition.',
@@ -82,7 +82,7 @@ export const DESIGN = {
     ]),
     density: choice('How much is packed into the first screen of `screenshots`?', {
         too_sparse: 'Large empty areas with little content; a person has to scroll or hunt for anything useful.',
-        balanced: 'Enough content to be useful at a glance, with room to breathe.',
+        balanced: 'Enough content to be useful at a glance, with room to breathe. A table, chart or map packed because that is what the product is for (as `product` describes it, when given) is balanced, and so is an empty state that asks the person to add or search for something.',
         too_dense: 'So much text, data or controls that it is hard to know where to look.',
     }),
     hierarchy: score('How clear is the visual hierarchy in `screenshots`?', [
@@ -92,7 +92,7 @@ export const DESIGN = {
         'The title, main content and actions are clearly ranked, with a few minor distractions.',
         'At a glance a person can tell what the screen is, what matters most and what to do.',
     ]),
-    legibility: score('How easy is the text in `screenshots` to read?', [
+    legibility: score("How easy is the text in `screenshots` to read? Judge the text meant to be read here: not a decorative picture (product art shown small or tilted), and not rows fading at a scrolling panel's bottom edge.", [
         'Much of the text is too faint, too small or too low in contrast to read.',
         'Several labels or paragraphs are hard to read.',
         'Most text is readable, but some secondary text is faint or tiny.',
@@ -141,7 +141,7 @@ export const HEURISTICS = (audience: string, context?: string) => ({
         'Options are visible and labelled, with a few behind a menu.',
         'Every option the person needs here is visible and labelled.',
     ]),
-    h8_minimalist: score('How free are `screenshots` of things that do not help the person with this screen?', [
+    h8_minimalist: score("How free are `screenshots` of things that do not help the person with this screen? One decorative picture beside the content, and rows fading at a scrolling panel's bottom edge, take nothing away.", [
         'Most of what is shown is decoration, repetition or unrelated content.',
         'Several parts add nothing and compete for attention.',
         'Some parts could go without loss.',

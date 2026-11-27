@@ -21,7 +21,7 @@ describes the app; one run writes one report.
 |---|---|---|
 | `crawl` | code | 4xx/5xx and slow pages, console errors, broken images and links, unlabelled fields |
 | `contract` | code | failing or slow API calls (to the app's host and its subdomains, `api.<domain>` too), unparsable JSON, responses that changed shape |
-| `security` | code | missing headers, weak cookie flags, pages open when signed out, CSRF, leaked secrets |
+| `security` | code | missing headers, weak cookie flags, pages open when signed out (with `signedIn`, pages that still show it), CSRF, leaked secrets, new-tab links without `noopener` |
 | `a11y` | code | axe-core WCAG 2.2 A/AA violations, keyboard focus, page language |
 | `interact` | code | clicks every safe control: errors, controls that do nothing, broken dialogs and tables |
 | `audit` | code and Jev | the UI on desktop, dark mode, tablet and phone, and each menu and dialog it opens; inconsistent components and design tokens |
@@ -32,7 +32,8 @@ describes the app; one run writes one report.
 
 Each suite runs once per side (`public`, `customer`, `admin`: each kind of person who sees a different app). Jev answers
 with probabilities and code decides: a clear answer passes or fails, an unsure one is a warning, and so is a score just
-under the pass mark (5.5 to 7 out of 10). Without a Jev key the Jev parts are skipped and everything else runs.
+under the pass mark (5.5 to 7 out of 10; trust and minimalism pass from 5.5). Without a Jev key the Jev parts are
+skipped and everything else runs.
 
 `MARK=1` puts a marked screenshot first in each failing or warning finding: a banner saying the check, and a numbered
 box and a note on each element at fault. To check a release or a pull request item by item, the `tapcheck-verify` skill
@@ -177,8 +178,9 @@ screenshots, `ONLY=verify` for the release flows, `LOGIN=1` to sign in again, `L
 
 <img alt="A tapcheck report: one card per suite, then each finding with its evidence" src="https://raw.githubusercontent.com/ashishjain15491/tapcheck/main/assets/report.png">
 
-Each run writes `.tapcheck/run-<time>/` (git-ignore it): `report.html`, `REPORT.md` for a pull request,
-`findings.json` for tools and agents, and the screenshots and evidence. The exit code is 0 when no check fails, 1 when
+Each run writes `.tapcheck/run-<time>/` (git-ignore it): `report.html`, `REPORT.md` for a pull request (failures,
+warnings, skipped parts and the `expect:` matches), `findings.json` for tools and agents, and the screenshots and
+evidence. The exit code is 0 when no check fails, 1 when
 one does, and 2 when the run couldn't start.
 
 ## Jev and your data

@@ -75,5 +75,33 @@ test('crawl: a hash-routed app gets a page per route, with its status', async ()
         await crawl.run(r);
         assert.deepEqual(r.crawl.pages.map((p) => [p.path, p.status, p.finalPath]), [['/', 200, '/'], ['/#scanner', 200, '/#scanner'], ['/#map', 200, '/#map'], ['/#/help', 200, '/#/help']]);
         assert.deepEqual(found.filter((f) => f.check === 'page answers' && f.status !== 'pass'), []);
+        // Each hash screen is reached under its own name, and screens with their own heading are distinct.
+        assert.deepEqual(r.reached!.map((x) => x.what), ['GET /', 'GET /#scanner', 'GET /#map', 'GET /#/help']);
+        assert.deepEqual(found.filter((f) => f.check === 'screens are distinct'), []);
+    } finally { await closeBrowser(); server.close(); }
+});
+
+test('crawl: the load time leaves out the wait for a quiet network, and a screen configured twice is said', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-load-`);
+    // A shop whose home keeps a request open for 1.5 s, as a live feed does. /old redirects to it, /same shows the same
+    // screen at another address, /other has the same controls under its own heading.
+    const html = (h1: string) => `<!doctype html><html lang="en"><title>Shop</title><body><h1>${h1}</h1><button>Buy</button><script>if (location.pathname === '/') fetch('/poll');</script></body></html>`;
+    const server = createServer((req, res) => {
+        if (req.url === '/poll') return void setTimeout(() => res.writeHead(200, { 'content-type': 'application/json' }).end('{}'), 1500);
+        if (req.url === '/old') return res.writeHead(302, { location: '/' }).end();
+        res.writeHead(200, { 'content-type': 'text/html' }).end(html(req.url === '/other' ? 'Other' : 'Shop'));
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    try {
+        const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }],
+            screens: [{ name: 'Home', path: '/' }, { name: 'Old', path: '/old' }, { name: 'Same', path: '/same' }, { name: 'Other', path: '/other' }] }, tmp);
+        const found: Omit<Finding, 'side'>[] = [];
+        const r: Run = { cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } };
+        await crawl.run(r);
+        assert.ok(r.crawl.pages[0].ms < 1000, `the load, not the 1.5 s request after it: ${r.crawl.pages[0].ms} ms`);
+        assert.ok(r.crawl.hits.some((h) => h.url.endsWith('/poll') && h.ms >= 1400 && h.keys?.length === 0), 'the crawl still waited for the request');
+        assert.deepEqual(found.filter((f) => /^loads under/.test(f.check)).map((f) => f.status), ['pass', 'pass', 'pass', 'pass']);
+        assert.deepEqual(found.filter((f) => f.check === 'screens are distinct').map((f) => [f.where, f.status, f.detail!.split(':')[0]]),
+            [['/old', 'warn', '"Old" renders the same as "Home" (/)'], ['/same', 'warn', '"Same" renders the same as "Home" (/)']]);
     } finally { await closeBrowser(); server.close(); }
 });

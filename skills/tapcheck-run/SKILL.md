@@ -67,7 +67,7 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
   start. `LOGIN=1` makes it ask again when the saved session has expired. The saved session is written again as each
   part ends, so it stays good across a long run; a side that stops as "session expired" partway needs `LOGIN=1`.
 - `CONTRACT_UPDATE=1` accepts the current JSON response shapes as the new baseline. Only when the user confirms the
-  API change was intended.
+  API change was intended. Endpoints seen for the first time are added to the baseline on their own.
 - If `tapcheck.yml` has `app.resetWhen`, `app.reset` runs by itself when one of those files changed since the last
   reset (the output says `Resetting (<why>)`). It wipes the test database like `RESET=1`: say so before the run when a
   matching file has changed.
@@ -79,8 +79,8 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
   folder larger.
 - `MARK=1` (or `marks: true` in `tapcheck.yml`) puts a marked screenshot first in the evidence of each failing or
   warning finding: a banner saying the check, and a box and a note on each element the check found (`audit`, `a11y`,
-  `crawl`, `interact`, a flow's `t.mark`); what Jev judged gets the banner alone. Use it when the report is for
-  people to read; it adds screenshots, not checks.
+  `crawl`, `interact`, a flow's `t.mark`); what Jev judged gets the banner alone, on each of its first three
+  screenshots. Use it when the report is for people to read; it adds screenshots, not checks.
 - `TAPCHECK_CONFIG=path` uses another config file.
 
 ### Jev and its cost
@@ -120,7 +120,8 @@ screenshot before describing what it shows (a `shots/marked-*.png` one has the p
 flow also carries `item`, the release item it checks, and the report then opens with "Release verification". More detail per side is in the run folder: `crawl.json` (pages and link
 statuses), `network.json` (every request), `axe.json`, `interact.json` (the controls, dialogs and tables exercised),
 `audit.json` (every audit problem, the looks of each kind of control, styles outside the tokens), `clickstream.json`,
-`missed-routes.json`, `hits.json` (what each part reached), and `code.json` (the gates' output) at the top.
+`missed-routes.json`, `hits.json` (what each part reached: a hash screen as `GET /#route`, a call to another host of the
+site with its host, `GET api.example.com/orders`), and `code.json` (the gates' output) at the top.
 
 After a `RECORD=1` run, `report.html` and `REPORT.md` end with a Recordings list: per side and part, the videos
 (`<side>/videos/*.webm`) and the trace with its command, `npx playwright show-trace <file>`. Give the user that
@@ -145,11 +146,13 @@ Keep it short and in this order:
    stopped early: put it first, since its other checks never ran.
 3. **Warnings**, briefly. A warning from `interact` (a control that did nothing) or `audit` (several looks for one
    kind of control, mixed label case, a style outside the design tokens) is measured, and usually a design decision.
-   A warning from `ux` or `usability` is Jev being unsure, or a score just under 7 (5.5 to 7): it is for a person to
-   look at with the screenshot, not a defect and not a pass. Say that. A control that did nothing is one warning per
-   run, listing the screens it is on. When `audit` ran on the side, the desktop `visual:` findings are under `audit`
-   only; `ux` asks them at the other viewports.
-4. Parts skipped or not run, and why (no key, `JEV=off`, budget reached, sign-in failed).
+   A warning from `ux` or `usability` is Jev being unsure, or a score just under the pass mark (5.5 to 7; for trust
+   and minimalism, which pass from 5.5, 4.4 to 5.5); the attention check is a prediction and warns at most. Each is
+   for a person to look at with the screenshot, not a defect and not a pass. Say that. A control that did nothing is
+   one warning per run, listing the screens it is on. When `audit` ran on the side, the desktop `visual:` findings
+   are under `audit` only; `ux` asks them at the other viewports.
+4. Parts skipped or not run, and why (no key, `JEV=off`, budget reached, sign-in failed, no tasks for the side), and
+   any `expect:` matches (REPORT.md's "Expected" section). A part that recorded only info shows "nothing checked".
 5. The Jev spend line the run printed (`Jev: … calls, … $0.12 of the $1 budget`), if Jev ran.
 6. The path of `report.html`, for the user to open; `REPORT.md` next to it is the same in a form that pastes into a
    pull request.

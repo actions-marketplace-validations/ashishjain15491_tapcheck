@@ -114,11 +114,12 @@ browser leaves every path matching `loginPaths`.
 A run stops a side with "the session has expired" when a signed-in page sends it to a `loginPaths` path. An app that
 shows its sign-in form in place, at the same address (common with hash routes), sends it nowhere: give that side
 `signedIn`, a selector on every signed-in page and not on the sign-in form (the account menu, say). A page without it
-ends the side the same way, and a manual sign-in waits for it too. The session is saved again as each part ends, so
-sign-ins whose tokens change on every refresh (Supabase, Auth0, Cognito) stay good for the next part and the next run.
-What is saved again is the cookies and the local storage entries that hold the sign-in (names with `auth`, `token`,
-`session`, `jwt`, `cred` or `sb-`); the rest of local storage stays as it was at sign-in, so a filter or tab one part
-changed isn't carried into the next.
+ends the side the same way, and a manual sign-in waits for it too. `security` uses it as well: it opens the side's
+screens without the session, and a page that still shows the selector fails "pages need sign-in". The session is saved
+again as each part ends, so sign-ins whose tokens change on every refresh (Supabase, Auth0, Cognito) stay good for the
+next part and the next run. What is saved again is the cookies and the local storage entries that hold the sign-in
+(names with `auth`, `token`, `session`, `jwt`, `cred` or `sb-`); the rest of local storage stays as it was at sign-in,
+so a filter or tab one part changed isn't carried into the next.
 
 ## screens
 
@@ -133,6 +134,9 @@ screens; the crawl starts from them. With no screens, all four use `/`. `purpose
 
 An app that routes in the hash (`/#scanner`, `/#/orders`) lists each screen by its hash: each is loaded afresh and
 counts as its own page. Its menu is often buttons, not links, so the crawl can't find those screens by itself.
+
+Two screens that land on the same address, or show the same title, heading and controls, get a `crawl` warning
+"screens are distinct": they are one page under two names, and every check would report it twice. Keep one.
 
 ## tasks
 
@@ -175,7 +179,13 @@ way, so point `interact` at test data.
 window, changes under `prefers-color-scheme: dark`; an app that takes its theme from an account setting shows no dark
 mode this way, so sign that side in with the account set to dark to audit it. Controls that overlap but that scrolling
 moves apart (a floating chat button over a long page, an arrow over the row it scrolls) are not a finding; the same
-button over a control on a page with no room to scroll is. Jev looks at an opened menu or dialog cut out of the screen. `max` adds that many pages from the crawl (the crawl has to be in the same run: `ONLY=crawl,audit`);
+button over a control on a page with no room to scroll is. Jev looks at an opened menu or dialog cut out of the screen,
+once its content has loaded. Dark-mode contrast lists only what fails in dark and not in light. The focus ring is
+checked on Tab stops from the top and from the main content. Overlap and target size measure 300 controls a screen,
+those in the window first, and an info row says when there were more. The consistency checks leave out card-sized
+buttons, page numbers and data shown as labels (with figures, long, or one of a list of rows).
+
+`max` adds that many pages from the crawl (the crawl has to be in the same run: `ONLY=crawl,audit`);
 `skip` is a regular expression of paths to leave out, for pages that are a canvas or an editor. It opens only the
 menus and dialogs the markup announces (`aria-haspopup`, `aria-expanded="false"`, `popovertarget`).
 
@@ -301,11 +311,13 @@ repository `resetWhen` is ignored, with one line saying so. `RESET=1` still forc
 
 ## coverage (for COVERAGE=1)
 
-Every run writes `hits.json` per side: each request the app answered, the dialogs and table controls `interact`
-exercised, and for a flow the step that did it. `COVERAGE=1 tapcheck` runs nothing; it merges the `hits.json` of
-every run folder under `out` into one Markdown file, so parts run one at a time add up. With a `routes` command, each
-route is listed with the parts that reached it, or **GAP**; without one, the file lists what was reached. A form
-POST that carries `_method=PUT|PATCH|DELETE` (or an `X-HTTP-Method-Override` header) is counted as that method.
+Every run writes `hits.json` per side: each request the app answered (a hash screen as `GET /#route`, a call to another
+host of the app's site with that host: `GET api.example.com/orders`, which still matches a route `GET /orders`), the
+dialogs and table controls `interact` exercised, and for a flow the step that did it. `COVERAGE=1 tapcheck` runs
+nothing; it merges the `hits.json` of every run folder under `out` into one Markdown file, so parts run one at a time
+add up. With a `routes` command, each route is listed with the parts that reached it, or **GAP**; without one, the file
+lists what was reached. A form POST that carries `_method=PUT|PATCH|DELETE` (or an `X-HTTP-Method-Override` header) is
+counted as that method.
 
 ```yaml
 coverage:
@@ -430,7 +442,7 @@ check off for the run. The sign-in browser of a `form` login doesn't get these s
 | `RECORD=1` | a video and a Playwright trace of every browser context, under `<side>/videos/` and `<side>/traces/`, linked from the report |
 | `COVERAGE=1` | no run: merge every run's `hits.json` into `COVERAGE.md` (see coverage) |
 | `LOGIN=1` | sign in again by hand on `manual` sides |
-| `CONTRACT_UPDATE=1` | accept the current JSON response shapes as the contract baseline |
+| `CONTRACT_UPDATE=1` | accept the current JSON response shapes as the contract baseline (new endpoints are added without it) |
 | `TAPCHECK_CONFIG=path` | another config file instead of `./tapcheck.yml` |
 
 Tags: each suite's name, each side's name, `jev` (ux, usability), `measured` (everything else), `code`, `flow`, and

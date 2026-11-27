@@ -1,16 +1,17 @@
 import { cookieProblems } from '../src/suites/security.ts';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { check, expand, isLocal } from '../src/config.ts';
 import { off, totp } from '../src/auth.ts';
 import { UNSAFE } from '../src/suites/usability.ts';
 import { expected } from '../src/report.ts';
-import { guard, SessionExpired, site, type Run } from '../src/browser.ts';
+import { guard, SessionExpired, site, type Hit, type Run } from '../src/browser.ts';
+import * as contract from '../src/suites/contract.ts';
 import { endpoint, shape } from '../src/suites/contract.ts';
 import { leaksIn } from '../src/suites/security.ts';
-import { findings, record, write } from '../src/report.ts';
+import { findings, record, write, type Finding } from '../src/report.ts';
 
 test('config: defaults for a bare public site', () => {
     const c = check({ baseUrl: 'http://localhost:8000/' });
@@ -113,11 +114,46 @@ test('contract: ids normalised, shapes keyed', () => {
     // A call to the app's API on another host is named with that host; one to its own host is not.
     assert.equal(endpoint('GET', 'https://api.shop.com/orders/7', 'https://app.shop.com'), 'GET api.shop.com/orders/{id}');
     assert.equal(endpoint('GET', 'https://app.shop.com/orders/7', 'https://app.shop.com'), 'GET /orders/{id}');
+    // A ticker or a code in capitals is an id; a word in the path is not.
+    assert.equal(endpoint('GET', 'http://x/api/strikes/SPY'), endpoint('GET', 'http://x/api/strikes/TSLA'));
+    assert.equal(endpoint('GET', 'http://x/api/strikes/spy'), 'GET /api/strikes/spy');
+});
+
+test('contract: latency by host, shapes from every response, and a baseline that fills', async () => {
+    const out = mkdtempSync(`${tmpdir()}/tapcheck-contract-`);
+    const found: Omit<Finding, 'side'>[] = [];
+    const hit = (url: string, keys?: string[], ms = 50) => ({ url, method: 'GET', type: 'fetch', status: 200, contentType: 'application/json', ms, bytes: 900, page: '/', json: 'ok' as const, keys });
+    const run = (hits: Hit[]) => { found.length = 0; return contract.run({ cfg: { out }, side: { name: 'public', baseUrl: 'https://app.shop.com' }, record: (f: Omit<Finding, 'side'>) => { found.push(f); }, crawl: { pages: [], hits, done: true } } as unknown as Run); };
+    const at = (where: string) => found.filter((f) => f.where === where && /p95|shape/.test(f.check)).map((f) => [f.check, f.status, f.detail]);
+    const saved = () => JSON.parse(readFileSync(`${out}/contract-public.json`, 'utf8'));
+    writeFileSync(`${out}/contract-public.json`, '{}'); // a baseline an earlier run left empty
+
+    // 20 calls to the API host at 1.5 s: fine for a remote API. One slow call to the app's own host is too few for a p95.
+    // /access answers a list or an object, by its query; /orders has its keys from the whole body.
+    await run([...Array.from({ length: 20 }, () => hit('https://api.shop.com/orders', ['id', 'total'], 1500)), hit('https://app.shop.com/me', ['name'], 900),
+        hit('https://api.shop.com/access?all=1', ['[array]']), hit('https://api.shop.com/access', ['plan'])]);
+    assert.deepEqual(at('XHR/fetch'), [['p95 latency under 800 ms', 'info', 'too few calls for a p95 (1 call, slowest 900 ms)']]);
+    assert.deepEqual(at('XHR/fetch to api.shop.com'), [['p95 latency under 2000 ms', 'pass', 'p95 1500 ms over 22 calls to api.shop.com']]);
+    assert.deepEqual(at('GET api.shop.com/orders'), [['response shape', 'info', 'new endpoint, added to the baseline: id, total']]);
+    assert.deepEqual(saved(), { 'GET api.shop.com/orders': ['id', 'total'], 'GET /me': ['name'], 'GET api.shop.com/access': ['[array]', 'plan'] });
+
+    // The next run compares: a key gone fails, a list-or-object endpoint isn't compared, a slow API warns, and a key that
+    // one response has and another lacks counts as there. An endpoint in the baseline keeps its keys.
+    await run([...Array.from({ length: 19 }, () => hit('https://api.shop.com/orders', ['id'], 2500)), hit('https://api.shop.com/orders', ['id', 'tax'], 2500),
+        hit('https://app.shop.com/me', ['[array]']), hit('https://api.shop.com/access', ['plan'])]);
+    assert.deepEqual(at('XHR/fetch to api.shop.com')[0].slice(0, 2), ['p95 latency under 2000 ms', 'warn']);
+    assert.deepEqual(at('GET api.shop.com/orders'), [['response shape', 'fail', 'removed: total · added: tax']]);
+    assert.deepEqual(at('GET api.shop.com/access'), [['response shape', 'info', 'answers a list to some calls and an object to others: not compared']]);
+    assert.deepEqual(at('GET /me').map((f) => f.slice(0, 2)), [['response shape', 'warn']]);
+    assert.deepEqual(saved()['GET api.shop.com/orders'], ['id', 'total']);
 });
 
 test("site: an app's subdomains are one site; a shared host, an IP and localhost are not", () => {
     assert.equal(site('https://app.shop.com/x'), site('https://api.shop.com/y'));
     assert.equal(site('https://www.shop.co.uk'), 'shop.co.uk');
+    assert.equal(site('https://api.abc.io'), site('https://app.abc.io')); // a short name under a two-letter ending is still one site
+    assert.equal(site('https://app.cal.ai/x'), 'cal.ai');
+    assert.equal(site('https://www.shop.com.au'), 'shop.com.au');
     assert.notEqual(site('https://mine.vercel.app'), site('https://theirs.vercel.app'));
     assert.notEqual(site('http://a.localhost:3000'), site('http://b.localhost:3000'));
     assert.equal(site('http://127.0.0.1:8000'), '127.0.0.1');
@@ -140,16 +176,26 @@ test('report: failures first, counts per suite, REPORT.md', () => {
     record({ suite: 'crawl', side: 'public', where: '/x', check: 'page answers', status: 'fail', detail: '500' });
     record({ suite: 'a11y', side: 'public', where: 'Home', check: 'axe', status: 'warn' });
     record({ suite: 'ux', side: 'public', where: 'ux-public', check: 'part ran', status: 'info', detail: 'skipped (JEV=off).' });
+    record({ suite: 'usability', side: 'public', where: 'usability-public', check: 'part ran', status: 'info', detail: 'skipped: no tasks for this side' });
+    record({ suite: 'usability', side: 'public', where: 'usability-public', check: 'tasks', status: 'info', detail: '0 tasks' });
+    record({ suite: 'contract', side: 'public', where: 'response shapes', check: 'baseline', status: 'info', detail: '3 endpoint shape(s) saved' });
+    record({ suite: 'audit', side: 'public', where: 'Home', check: 'text fits', status: 'info', detail: 'expected: tiles shorten names (was fail: "Monstera…")' });
     const { bySuite, fails } = write(dir, { base: 'http://localhost', started: Date.now() });
     assert.equal(fails, 1);
-    assert.deepEqual(bySuite.find((b) => b.s === 'crawl'), { s: 'crawl', pass: 1, fail: 1, warn: 0, total: 2, skipped: false });
+    assert.deepEqual(bySuite.find((b) => b.s === 'crawl'), { s: 'crawl', pass: 1, fail: 1, warn: 0, total: 2, skipped: false, empty: false });
     assert.equal(bySuite.find((b) => b.s === 'ux')?.skipped, true);
+    // Only info rows: skipped when one says so, nothing checked otherwise; a row an expect rule accepted was checked.
+    assert.deepEqual(['usability', 'contract', 'audit'].map((s) => { const b = bySuite.find((x) => x.s === s)!; return [b.skipped, b.empty]; }), [[true, false], [false, true], [false, false]]);
     const md = readFileSync(`${dir}/REPORT.md`, 'utf8');
     assert.match(md, /## Failing\n\n- \*\*crawl\*\* · \/x · page answers: 500/);
-    assert.match(md, /## Skipped\n\n- \*\*ux\*\* · ux-public · part ran: skipped \(JEV=off\)\./);
+    assert.match(md, /## Skipped\n\n(- .*\n)*- \*\*ux\*\* · ux-public · part ran: skipped \(JEV=off\)\./);
+    assert.ok(md.includes('- **usability** · usability-public · part ran: skipped: no tasks for this side'), md);
+    assert.ok(md.includes('## Expected\n\n- **audit** · Home · text fits: expected: tiles shorten names (was fail: "Monstera…")\n'), md);
+    assert.ok(md.includes('| contract | — | — | — nothing checked — |') && md.includes('\n2 info rows in report.html.\n'), md);
     const html = readFileSync(`${dir}/report.html`, 'utf8');
     assert.ok(html.indexOf('tag fail') < html.indexOf('tag pass'));
     assert.match(html, /<b>ux<\/b><span class="n w">skipped<\/span>/);
+    assert.match(html, /<b>contract<\/b><span class="n w">nothing checked<\/span>/);
 });
 
 test('session guard: LOGIN=1 is suggested on a manual side only', () => {

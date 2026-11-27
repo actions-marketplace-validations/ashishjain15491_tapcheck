@@ -9,7 +9,7 @@ import type { Config, Screen, Side } from './config.ts';
 import type { Finding } from './report.ts';
 
 export type Viewport = Config['viewports'][number];
-export type Hit = { url: string; method: string; type: string; status: number; contentType: string; ms: number; bytes: number; page: string; json?: 'ok' | 'invalid'; body?: string };
+export type Hit = { url: string; method: string; type: string; status: number; contentType: string; ms: number; bytes: number; page: string; json?: 'ok' | 'invalid'; body?: string; keys?: string[] }; // keys: a JSON body's top-level keys, from the whole body (body is its first 400 characters)
 export type Visited = { path: string; status: number; finalPath: string; ms: number; errors: string[]; links: string[] };
 /** One side's run: its config, where its evidence goes, its saved session, and what its crawl found (contract and security read it). */
 export type Run = {
@@ -95,21 +95,22 @@ const SHARED = /\.(vercel\.app|netlify\.app|github\.io|herokuapp\.com|pages\.dev
  * so an app's own API on another subdomain counts as the app. A bare host, an IP address and a name on a shared host
  * (my-app.vercel.app) stand alone.
  */
-// ponytail: last two labels (three for co.uk-style names), not the public suffix list; add a list entry if a shared host is missed
+// ponytail: last two labels (three for co.uk-style names: a two-letter country under co, com, org, net, ac, gov or edu), not
+// the public suffix list; add a list entry if a shared host is missed
 export const site = (u: string) => {
     let h: string;
     try { h = new URL(u).hostname; } catch { return ''; }
     if (!h.includes('.') || /^[\d.]+$|:/.test(h) || SHARED.test(h)) return h;
     const parts = h.split('.');
-    const n = parts.length > 2 && parts.at(-1)!.length === 2 && parts.at(-2)!.length <= 3 ? 3 : 2;
+    const n = parts.length > 2 && parts.at(-1)!.length === 2 && /^(co|com|org|net|ac|gov|edu)$/.test(parts.at(-2)!) ? 3 : 2;
     return parts.slice(-n).join('.');
 };
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'unlabelled';
 
 /**
  * A context at this viewport: signed in with the side's session unless auth is false. Every suite and flow gets its
- * contexts here, so two things hold for all of them: each answered request to the side's own host is filed for the
- * coverage map, and with RECORD=1 the context records a video per page (<side dir>/videos/) and a Playwright trace
+ * contexts here, so two things hold for all of them: each answered request to the side's own site is filed for the
+ * coverage map (one to another of its hosts, an API at api.<domain>, with that host before the path), and with RECORD=1 the context records a video per page (<side dir>/videos/) and a Playwright trace
  * (<side dir>/traces/), written when the context closes.
  */
 /** The contexts that carry the side's session (and still have it). */
@@ -147,11 +148,13 @@ export async function context(r: Run, vp: Viewport, auth = true, bypassCSP = fal
         const close = ctx.close.bind(ctx);
         ctx.close = async (...a) => { if (authed.delete(ctx)) await keep(ctx, r.auth!).catch(() => {}); return close(...a); };
     }
-    const own = host(r.side.baseUrl);
+    const own = host(r.side.baseUrl), mine = site(r.side.baseUrl);
     // Reached: a request to the app itself that it didn't refuse (401, 403, 405) or not find (404). Page assets aside.
     ctx.on('response', (res) => {
         const q = res.request();
-        if (host(q.url()) === own && !ASSET.includes(q.resourceType()) && !REFUSED.includes(res.status())) reach(r, `${routedMethod(q)} ${new URL(q.url()).pathname}`);
+        if (site(q.url()) !== mine || ASSET.includes(q.resourceType()) || REFUSED.includes(res.status())) return;
+        const u = new URL(q.url());
+        reach(r, `${routedMethod(q)} ${u.host === own ? '' : u.host}${u.pathname}`);
     });
     if (!record) return ctx;
 
@@ -242,6 +245,11 @@ export function here(url: string, path: string) {
     return u.pathname + (hashRoute(path) ? u.hash : '');
 }
 
+/** A hash screen that opened is reached as "GET /#scanner": the request the browser sent for it only says "GET /". */
+export function reachHash(r: Run, page: Page, path: string, status = 0) {
+    if (hashRoute(path) && status >= 200 && status < 400) reach(r, `GET ${here(page.url(), path)}`);
+}
+
 /** page.goto as a document load. Going to another hash of the page that's open only changes the fragment: the browser
  * sends nothing, so there is no response (status 0) and the app may not start afresh. Leave the page first. */
 export async function load(page: Page, url: string, opts: Parameters<Page['goto']>[1] = { waitUntil: 'domcontentloaded' }) {
@@ -260,6 +268,7 @@ export async function open(r: Run, page: Page, path: string) {
     });
     await settle(page);
     await signedIn(r, page, path);
+    reachHash(r, page, path, res?.status());
     return res;
 }
 
@@ -275,12 +284,13 @@ export async function resolve(r: Run, page: Page, s: Screen): Promise<string | n
 
 /**
  * The screen as up to `max` viewport-sized slices, top to bottom, saved as <run dir>/shots/<key>-<n>.png (Jev takes
- * images 280–1568 px a side). When the document doesn't scroll but a panel in it does (an app shell with its content in
- * a scrolling main area), the largest such panel is scrolled instead, a panel's height at a time.
+ * images 280–1568 px a side). When the document scrolls less than a quarter of the viewport but a panel in it scrolls (an
+ * app shell with its content in a scrolling main area), the largest such panel is scrolled instead, a panel's height at
+ * a time: a document that scrolls a few pixels would give the same screen twice.
  */
 export async function slices(r: Run, page: Page, key: string, height: number, vh: number, max = 3) {
     mkdirSync(`${r.dir}/shots`, { recursive: true });
-    const panel = height > vh + 1 ? null : await page.evaluate(() => {
+    const panel = height >= vh * 1.25 ? null : await page.evaluate(() => {
         let best: Element | null = null, area = 0;
         for (const el of document.querySelectorAll('body *')) {
             if (el.scrollHeight <= el.clientHeight + 1 || !/(auto|scroll)/.test(getComputedStyle(el).overflowY)) continue;
@@ -482,15 +492,20 @@ export async function marked(r: Run, page: Page, label: string, banner: { status
 /**
  * With marks on, each fail and warning of `list` that has a screenshot but no marked one (what Jev judged, a failed flow
  * step) gets a copy of it with the banner alone, put first in its evidence. Jev says what is wrong, not where, so no
- * box is drawn.
+ * box is drawn, and a finding with several screenshots (a screen's slices) gets a banner on each of the first three:
+ * what it is about may be on any of them.
  */
 export async function banners(r: Run, list: Finding[]) {
     for (const f of list.filter((f) => (f.status === 'fail' || f.status === 'warn') && /\.png$/.test(f.evidence?.[0] ?? '') && !f.evidence![0].includes('/shots/marked-'))) {
-        const file = name(r, `${f.suite} ${f.where} ${f.check}`);
-        try {
-            mkdirSync(`${r.dir}/shots`, { recursive: true });
-            await frame(readFileSync(f.evidence![0]), file, { status: f.status, title: f.check, detail: [f.where, f.detail].filter(Boolean).join(' · ') });
-            f.evidence = [file, ...f.evidence!]; // a new list: findings of one look share theirs
-        } catch { /* the screenshot is gone or isn't one: the finding stands without a banner */ }
+        const shots = f.evidence!.filter((e) => /\.png$/.test(e)).slice(0, 3), done: string[] = [];
+        for (const [i, shot] of shots.entries()) {
+            const file = name(r, `${f.suite} ${f.where} ${f.check}`);
+            try {
+                mkdirSync(`${r.dir}/shots`, { recursive: true });
+                await frame(readFileSync(shot), file, { status: f.status, title: f.check, detail: [f.where, f.detail, shots.length > 1 ? `screenshot ${i + 1} of ${shots.length}` : ''].filter(Boolean).join(' · ') });
+                done.push(file);
+            } catch { /* the screenshot is gone or isn't one: the finding stands without a banner */ }
+        }
+        if (done.length) f.evidence = [...done, ...f.evidence!]; // a new list: findings of one look share theirs
     }
 }

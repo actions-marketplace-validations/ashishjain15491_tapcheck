@@ -208,6 +208,11 @@ test('t.mark, t.untested and verify flows: marked evidence, the verify tag, and 
     assert.match(step.evidence![0], MARKED);
     assert.match(step.evidence![1], /shots\/flow-plain-001-/);
     assert.equal(at('20 orders on a page').evidence!.length, 1, 'a finding with a marked screenshot gets no second one');
+    // What Jev judged over a screen's slices may be on any of them: each of the first three gets the banner.
+    const plain = step.evidence![1], look: Finding = { suite: 'ux', side: 'public', where: 'Cart · desktop', check: 'visual: clutter', status: 'warn', evidence: [plain, plain, plain, plain] };
+    await banners(r, [look]);
+    assert.deepEqual(look.evidence!.map((e) => MARKED.test(e)), [true, true, true, false, false, false, false]);
+    assert.equal(new Set(look.evidence).size, 4);
 
     // Without marks on, t.mark is a finding with a status and nothing else: no screenshot, no Jev.
     const off = run({ flows: 'plain.flow.mjs' }, { scoped: true });

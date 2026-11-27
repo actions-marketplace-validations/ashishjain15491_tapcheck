@@ -11,14 +11,15 @@ import type { Finding } from './report.ts';
 
 // ───────────────────────────── verdict rules ─────────────────────────────
 // Noul: above 0.7 is yes, below 0.3 is no, between is unsure. A Score's position 0–4 maps to 1–10: 7 or more passes,
-// under FAIL_SCORE fails, and between is a warning (a near miss is a judgement call, not a defect).
+// under FAIL_SCORE fails, and between is a warning (a near miss is a judgement call, not a defect). A check whose scale
+// puts "fine" lower gives scoreStatus its own two marks.
 export const YES = 0.7, NO = 0.3, MIN_SCORE = 7, FAIL_SCORE = 5.5;
 export type Verdict = 'pass' | 'FAIL' | 'unsure';
 export const good = (p: number): Verdict => (p > YES ? 'pass' : p < NO ? 'FAIL' : 'unsure'); // yes is good
 export const bad = (p: number): Verdict => (p < NO ? 'pass' : p > YES ? 'FAIL' : 'unsure'); // yes is a defect
 export const to10 = (pos: number) => Math.round((1 + (pos * 9) / 4) * 10) / 10;
 /** A Score's status: 7 or more passes; a near miss (from FAIL_SCORE), or a low score Jev was split on, is a warning. */
-export const scoreStatus = (v: number, confidence: number, split = 0.3): Finding['status'] => (v >= MIN_SCORE ? 'pass' : v >= FAIL_SCORE || confidence < split ? 'warn' : 'fail');
+export const scoreStatus = (v: number, confidence: number, split = 0.3, pass = MIN_SCORE, fail = FAIL_SCORE): Finding['status'] => (v >= pass ? 'pass' : v >= fail || confidence < split ? 'warn' : 'fail');
 /** Verdict → finding status: an unsure Jev answer is a warning for a person to look at, never a pass. */
 export const status = (v: Verdict): Finding['status'] => (v === 'pass' ? 'pass' : v === 'FAIL' ? 'fail' : 'warn');
 

@@ -3,15 +3,18 @@
  * - response headers on HTML pages: nosniff, framing blocked (X-Frame-Options or CSP frame-ancestors), Referrer-Policy,
  *   a CSP, HSTS when served over https;
  * - session cookies (a side that signs in): HttpOnly (not for a CSRF token cookie), SameSite, Secure over https;
- * - signed out, every crawled page of a side that signs in refuses or sends the visitor to sign in;
+ * - signed out, every crawled page of a side that signs in refuses or sends the visitor to sign in. With the side's
+ *   `signedIn` selector set (an app that shows its sign-in form in place), its screens and the pages the server sends
+ *   to everyone are opened signed out and must not show that selector; and up to 20 of the app's GET calls the crawl
+ *   saw are sent again signed out, those that still answer with JSON listed as an info finding;
  * - CSRF (when security.csrf is set; on the sides that sign in, or every side when none does): the request, without a
  *   token, is refused with the expected status;
  * - secrets: no API keys, private keys or tokens in the served HTML or in the app's own scripts as served;
- * - links that open a new tab carry rel=noopener (or noreferrer);
+ * - links that open a new tab carry rel=noopener (or noreferrer), in the first 20 pages as the browser renders them;
  * - no requests to third-party hosts outside security.allowedHosts, listed with the page that made them.
  */
 import { request as pwRequest } from 'playwright';
-import { abs, context, host, site, type Run } from '../browser.ts';
+import { abs, context, host, load, open, SessionExpired, settle, site, type Run } from '../browser.ts';
 import { run as runCrawl } from './crawl.ts';
 
 export const SECRETS: [string, RegExp][] = [
@@ -37,7 +40,8 @@ export async function run(r: Run) {
         const missing: Record<string, string[]> = {};
         const leaks: string[] = [];
         const blank: string[] = [];
-        let html = 0;
+        let html = 0, tabs = 0;
+        const page = await ctx.newPage();
         for (const p of pages) {
             const res = await api.get(abs(r, p.path), { failOnStatusCode: false, maxRedirects: 0 }).catch(() => null);
             if (!res || !/text\/html/.test(res.headers()['content-type'] ?? '')) continue;
@@ -54,15 +58,20 @@ export async function run(r: Run) {
             for (const name of headers) if (!has[name]) (missing[name] ??= []).push(p.path);
             const body = await res.text();
             for (const name of leaksIn(body)) leaks.push(`${name} in ${p.path}`);
-            const opens = [...body.matchAll(/<a\b[^>]*target=["']?_blank[^>]*>/gi)].map((m) => m[0]).filter((a) => !/rel=["'][^"']*(noopener|noreferrer)/i.test(a));
-            if (opens.length) blank.push(`${p.path} (${opens.length})`);
+            // New-tab links, in the page as rendered: a client-rendered app's served HTML has no links at all.
+            if (html > 20) continue;
+            await open(r, page, p.path).catch((e) => { if (e instanceof SessionExpired) throw e; });
+            const rels = await page.$$eval('a[target=_blank]', (links) => links.map((a) => /noopener|noreferrer/i.test(a.getAttribute('rel') ?? ''))).catch(() => [] as boolean[]);
+            tabs += rels.length;
+            if (rels.includes(false)) blank.push(`${p.path} (${rels.filter((ok) => !ok).length})`);
         }
+        await page.close();
         for (const name of headers) {
             const on = missing[name] ?? [];
             r.record({ suite: S, where: 'HTML pages', check: `header: ${name}`, status: on.length ? (name === 'Content-Security-Policy' ? 'warn' : 'fail') : 'pass',
                 detail: on.length ? `missing on ${on.length}/${html}: ${on.slice(0, 5).join(', ')}` : `${html} pages` });
         }
-        r.record({ suite: S, where: 'HTML pages', check: 'new-tab links use rel=noopener', status: blank.length ? 'warn' : 'pass', detail: blank.slice(0, 6).join('; ') || undefined });
+        r.record({ suite: S, where: 'HTML pages', check: 'new-tab links use rel=noopener', status: blank.length ? 'warn' : 'pass', detail: blank.slice(0, 6).join('; ') || `${tabs} new-tab links on ${Math.min(html, 20)} rendered page(s)` });
 
         // The app's own scripts, as served (whatever built them).
         const scripts = [...new Set(r.crawl.hits.filter((h) => h.type === 'script' && host(h.url) === host(base) && h.status < 400).map((h) => h.url))].slice(0, 60);
@@ -85,17 +94,42 @@ export async function run(r: Run) {
 
             // Signed out: every page must refuse or send to sign in.
             const anon = await pwRequest.newContext();
-            const open: string[] = [];
+            const unrefused: string[] = [], shell: string[] = [];
             for (const p of pages) {
                 // Redirects are followed: `/` → `/admin` → `/login` refuses as surely as one hop does.
                 const res = await anon.get(abs(r, p.path), { failOnStatusCode: false, maxRedirects: 5 }).catch(() => null);
                 if (!res) continue;
                 const to = new URL(res.url()).pathname, moved = to !== new URL(abs(r, p.path)).pathname;
                 const refused = [401, 403, 404, 419].includes(res.status()) || (moved && r.cfg.loginPaths.test(to));
-                if (!refused) open.push(`${res.status()} ${p.path}${moved ? ` → ${to}` : ''}`);
+                if (!refused) { unrefused.push(`${res.status()} ${p.path}${moved ? ` → ${to}` : ''}`); shell.push(p.path); }
             }
+            const sel = r.side.signedIn;
+            if (!sel) r.record({ suite: S, where: 'signed out', check: 'pages need sign-in', status: unrefused.length ? 'fail' : 'pass', detail: unrefused.slice(0, 8).join('; ') || `${pages.length} pages refused` });
+            else {
+                // An app that signs in in place sends its shell to everyone, so the answer above tells nothing: the side's
+                // screens, and the pages that were sent, are opened without the session and must not show what only a signed-in page has.
+                const out = await context(r, r.cfg.viewports[0], false);
+                const tab = await out.newPage(), paths = [...new Set([...r.side.screens.flatMap((x) => x.path ?? []), ...shell])].slice(0, 20), shown: string[] = [];
+                for (const path of paths) {
+                    await load(tab, abs(r, path)).catch(() => null);
+                    await settle(tab);
+                    if (await tab.locator(sel).count().catch(() => 0)) shown.push(path);
+                }
+                await out.close();
+                r.record({ suite: S, where: 'signed out', check: 'pages need sign-in', status: shown.length ? 'fail' : 'pass',
+                    detail: shown.length ? `shows ${sel} signed out: ${shown.slice(0, 8).join(', ')}` : `${paths.length} page(s) opened signed out, none shows ${sel}; ${pages.length - unrefused.length} of ${pages.length} refused by the server` });
+            }
+
+            // The app's own GET calls, sent again without the session. Data for everyone may be meant, so it is a note.
+            const calls = [...new Set(r.crawl.hits.filter((h) => h.method === 'GET' && /^(xhr|fetch)$/.test(h.type) && h.status === 200 && site(h.url) === site(base)).map((h) => h.url))].slice(0, 20);
+            const answered: string[] = [];
+            for (const u of calls) {
+                const res = await anon.get(u, { failOnStatusCode: false }).catch(() => null);
+                if (res?.status() === 200 && /json/.test(res.headers()['content-type'] ?? '') && (await res.text().catch(() => '')).trim()) answered.push(new URL(u).pathname);
+            }
+            if (calls.length) r.record({ suite: S, where: 'signed out', check: 'API data needs sign-in', status: answered.length ? 'info' : 'pass',
+                detail: answered.length ? `${answered.length} of ${calls.length} GET call(s) answer with JSON signed out (fine when meant for everyone): ${[...new Set(answered)].slice(0, 8).join(', ')}` : `${calls.length} GET call(s) sent again, none answered with JSON` });
             await anon.dispose();
-            r.record({ suite: S, where: 'signed out', check: 'pages need sign-in', status: open.length ? 'fail' : 'pass', detail: open.slice(0, 8).join('; ') || `${pages.length} pages refused` });
         }
 
         // CSRF: the configured request, signed in, without a token.
