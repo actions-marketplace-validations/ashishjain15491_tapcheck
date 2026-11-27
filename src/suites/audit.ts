@@ -23,9 +23,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 import { device, mainViewport, type Config } from '../config.ts';
-import { context, hashRoute, marked, open, resolve, SessionExpired, settle, slices, slug, type Run, type Viewport } from '../browser.ts';
+import { context, hashRoute, itemStarts, marked, open, resolve, SessionExpired, settle, slices, slug, type Run, type Viewport } from '../browser.ts';
 import { ask, BudgetReached, img, looked, whyOff } from '../jev.ts';
-import { VISUAL } from '../questions.ts';
+import { POPUP_VISUAL, VISUAL } from '../questions.ts';
 import { AXE, toMain } from './a11y.ts';
 import { UNSAFE } from './usability.ts';
 import { visual } from './ux.ts';
@@ -307,10 +307,10 @@ export async function run(r: Run) {
     let jevOff = whyOff();
     if (jevOff) r.record({ suite: S, where: 'Jev', check: "Jev's look at each screen, menu and dialog", status: 'info', detail: `skipped (${jevOff}); the measured checks ran` });
     /** Jev's look at `shots`. Reaching the budget ends the looks, not the audit. */
-    const look = async (where: string, key: string, state: Record<string, unknown>, questions: Record<string, unknown>, shots: string[]) => {
+    const look = async (where: string, key: string, state: Record<string, unknown>, questions: Record<string, unknown>, shots: string[], crop = false, starts?: Awaited<ReturnType<typeof itemStarts>>) => {
         if (jevOff) return;
         try {
-            await visual(r, S, where, await ask(key, { ...state, screenshots: shots.map(img) }, questions, shots), shots);
+            await visual(r, S, where, await ask(key, { ...state, screenshots: shots.map(img) }, questions, shots), shots, { note: state.note as string | undefined, crop, questions, starts });
         } catch (e) {
             if (!(e instanceof BudgetReached)) throw e;
             jevOff = 'Jev budget reached';
@@ -326,7 +326,7 @@ export async function run(r: Run) {
         if (bad && !shots) await page.screenshot({ path: shot });
         for (const [check, list] of Object.entries(problems)) {
             const status = !list.length ? 'pass' : WARN.has(check) ? 'warn' : 'fail', detail = list.length ? `${list.length}: ${list.slice(0, 5).join('; ')}` : undefined;
-            const drawn = list.length && r.cfg.marks && MARKS[check] ? await marked(r, page, `audit ${where} ${check}`, { status, title: check, detail: `${where} · ${detail}` }, [{ target: `[data-tapcheck-mark-${MARKS[check]}]` }]) : undefined;
+            const drawn = list.length && r.cfg.marks && MARKS[check] ? await marked(r, page, `audit ${where} ${check}`, { status, title: check, detail: `${where} · ${detail}`, of: { suite: S, where } }, [{ target: `[data-tapcheck-mark-${MARKS[check]}]` }]) : undefined;
             r.record({ suite: S, where, check, status, detail, evidence: list.length ? [...(drawn ? [drawn] : []), ...(shots ?? [shot])] : undefined });
         }
         screen.views[view] = Object.fromEntries(Object.entries(problems).filter(([, l]) => l.length));
@@ -394,12 +394,13 @@ export async function run(r: Run) {
                 await page.screenshot({ path: shot });
                 const p = await page.evaluate(measure, { root: '[data-tapcheck-popup]', extras: false });
                 await emit(page, t, `${found} "${label}"`, at, p.problems, [shot], p.capped);
-                const { loaded: _, ...rest } = VISUAL;
-                const questions = /dialog/.test(found) ? VISUAL : rest; // a dialog loads its content as a screen does; a menu or a list of options doesn't
+                // Asked about the menu or dialog alone. A dialog loads its content as a screen does; a menu or a list of options doesn't.
+                const { loaded: _, ...rest } = POPUP_VISUAL;
+                const questions = /dialog/.test(found) ? POPUP_VISUAL : rest;
                 // Jev sees the menu or dialog alone: the page around it is covered on purpose, and isn't what is asked about.
                 const crop = jevOff ? undefined : await popupShot(page, `${r.dir}/shots/${key}-popup-${opened}-alone.png`);
                 await look(at, `${key}-popup-${opened}`, { screen: `${t.name}, after "${label}" was clicked`, viewport: `${desktop.name}, ${desktop.width} × ${desktop.height} px`,
-                    note: crop ? `The screenshot shows only the ${found} that opened, cut out of the screen; any of the page at its edges is not part of the question.` : undefined }, questions, [crop ?? shot]);
+                    note: crop ? `The screenshot shows only the ${found} that opened, cut out of the screen; any of the page at its edges is not part of the question.` : undefined }, questions, [crop ?? shot], !!crop, await itemStarts(page));
             }
             await page.keyboard.press('Escape').catch(() => {});
             await page.waitForTimeout(150);

@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 import { closeBrowser, type Run } from '../src/browser.ts';
 import { check } from '../src/config.ts';
 import { looked, scoreStatus, setup } from '../src/jev.ts';
-import { ATTENTION_CHECK, DESIGN, HEURISTICS, VISUAL } from '../src/questions.ts';
+import { ATTENTION_CHECK, DESIGN, HEURISTICS, POPUP_VISUAL, VISUAL } from '../src/questions.ts';
 import type { Finding } from '../src/report.ts';
 import * as ux from '../src/suites/ux.ts';
 
@@ -20,6 +20,11 @@ test('questions: what is not cut off, out of line or unloaded, and wording judge
     assert.match(text(VISUAL.misaligned), /edge or baseline that should match its neighbours is visibly off/);
     assert.match(text(VISUAL.loaded), /empty state that asks the person to pick, search for or add something.*counts as loaded/);
     assert.match(text(VISUAL.loaded), /loading spinner or grey placeholder blocks/);
+    // An opened menu or dialog is asked about its own items; the page behind it is covered on purpose and cut by the cut-out.
+    for (const k of ['overlap', 'clipped', 'misaligned'] as const) {
+        assert.match(POPUP_VISUAL[k].instructions as string, /of the menu or dialog that opened/);
+        assert.match(text(POPUP_VISUAL[k]), /The page behind it doesn't count: it is covered on purpose .* cut by the image's edges, which are tapcheck's cut-out/);
+    }
     // Every level of the wording question is about the screen's users; none marks down a technical term as such.
     const levels = text(HEURISTICS('traders').h2_language);
     assert.ok(!/jargon|technical/.test(levels));
@@ -139,4 +144,111 @@ test('visual: a failing defect says what was asked and is boxed on the slice tha
     assert.match(f('overlap').detail!, /Jev couldn't point to one place/);
     assert.deepEqual(f('overlap').evidence, shots);
     assert.equal(f('loaded').detail, `"Do the screenshots show the screen's main content, fully loaded?" Jev: yes (90% sure)`);
+});
+
+test('visual: an unsure answer says what to look for; a cut boxed at the edge of a menu cut-out is a warning, the crop', async () => {
+    const { sayNoul } = await import('../src/jev.ts');
+    assert.match(sayNoul(VISUAL.misaligned, 0.45, true, true), /^"In the screenshots, are items that belong in one row or column visibly out of line\?" Jev is unsure \(yes 45%\)\. Look for: An edge or baseline/);
+    assert.match(sayNoul(VISUAL.loaded, 0.45, true, false), /Jev is unsure \(yes 45%\)\. Look for: The screen is blank/);
+    assert.match(sayNoul(VISUAL.clipped, 0.9, true, true), /Jev: yes \(90% sure\)\. Yes means:/);
+
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-crop-`);
+    after(closeBrowser);
+    const { launch } = await import('../src/browser.ts');
+    const page = await (await launch()).newPage({ viewport: { width: 280, height: 280 } });
+    await page.setContent('<body style="margin:0;background:#eee"><p>menu</p></body>');
+    await page.screenshot({ path: `${tmp}/menu.png` });
+    await page.close();
+    const notes: unknown[] = [];
+    setup({ budget: 1, headers: {} }, { systemOne: async ({ questions, state }) => {
+        notes.push((state as any)?.note);
+        return { answers: Object.fromEntries(Object.keys(questions).map((k) => [k, { box: { top: 0, bottom: 0.4, left: 0, right: 0.3 } }])), usage: { input_tokens: 10 } };
+    } });
+    const found: Omit<Finding, 'side'>[] = [];
+    const r = { dir: tmp, record: (f: Omit<Finding, 'side'>) => { found.push(f); } } as unknown as Run;
+    await ux.visual(r, 'audit', 'Map › Sort', { clipped: { noul: 0.8 } }, [`${tmp}/menu.png`], { note: 'only the menu', crop: true });
+    assert.equal(found[0].status, 'warn');
+    assert.match(found[0].detail!, /boxed at the edge of tapcheck's cut-out of the menu or dialog, so the cut may be the crop's/);
+    assert.equal(found[0].evidence![0], `${tmp}/shots/audit_map_sort-where-clipped-1.png`);
+    // Away from a crop's edge, or on a full screen, the same box still fails.
+    found.length = 0;
+    await ux.visual(r, 'audit', 'Map', { clipped: { noul: 0.8 } }, [`${tmp}/menu.png`]);
+    assert.equal(found[0].status, 'fail');
+});
+
+test('visual: a cut Jev boxes at the end of a sideways row passes, one under a fixed chat button warns, measured on each slice', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-rail-`);
+    after(closeBrowser);
+    const { launch, slices, shotLayout } = await import('../src/browser.ts');
+    const page = await (await launch()).newPage({ viewport: { width: 1000, height: 500 } });
+    // A sideways row of chips, a tall page below it, and a chat button fixed at the bottom right.
+    await page.setContent(`<body style="margin:0"><div style="display:flex;overflow-x:auto;width:800px;margin:20px 0 0 100px;gap:8px">${Array.from({ length: 20 }, (_, i) => `<span style="flex:none;padding:6px;border:1px solid">Sector chip ${i + 1}</span>`).join('')}</div>
+        <div style="height:300px"></div><span style="margin-left:300px">Real E…</span><div style="height:300px"></div><button style="position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%">chat</button></body>`);
+    const shots = await slices({ dir: tmp } as Run, page, 'screen', await page.evaluate(() => document.documentElement.scrollHeight), 500);
+    await page.close();
+    assert.equal(shots.length, 2);
+    const first = shotLayout.get(shots[0])!, second = shotLayout.get(shots[1])!;
+    assert.deepEqual([first.rails.length, first.rails[0].left, first.rails[0].right], [1, 0.1, 0.9], 'the row, measured on the slice that shows it');
+    assert.ok(second.rails.length === 0 || second.rails[0].bottom < first.rails[0].bottom, 'scrolled up on the next slice');
+    assert.equal(first.floaters.length, 1);
+
+    const run = async (box: Record<string, number>, slice = 0) => {
+        let n = 0;
+        setup({ budget: 1, headers: {} }, { systemOne: async ({ questions, model }) => ({ answers: Object.fromEntries(Object.keys(questions).map((k) => [k,
+            model ? { box: n++ === slice ? box : { top: 0, bottom: 1, left: 0, right: 1 } } : { noul: 0.9 }])), usage: { input_tokens: 10 } }) });
+        const found: Omit<Finding, 'side'>[] = [];
+        await ux.visual({ dir: tmp, record: (f: Omit<Finding, 'side'>) => { found.push(f); } } as unknown as Run, 'audit', `Map ${JSON.stringify(box)}`, { clipped: { noul: 0.8 } }, shots);
+        return found[0];
+    };
+    const atEnd = await run({ top: 0.04, bottom: 0.12, left: 0.8, right: 0.89 });
+    assert.deepEqual([atEnd.status, /end of a row that scrolls sideways or on text shortened with "…" \(measured\)/.test(atEnd.detail!)], ['pass', true]);
+    // A box taller than the row, around its last chip, is still the row's end.
+    const tall = await run({ top: 0.02, bottom: 0.16, left: 0.82, right: 0.9 });
+    assert.equal(tall.status, 'pass');
+    const underChat = await run({ top: 0.86, bottom: 0.97, left: 0.9, right: 0.99 });
+    assert.deepEqual([underChat.status, /under a small control fixed over the page/.test(underChat.detail!)], ['warn', true]);
+    // A tile label shortened with "…" in its own text, boxed on the slice that shows it.
+    const label = shotLayout.get(shots[0])!.shortened[0] ?? shotLayout.get(shots[1])!.shortened[0];
+    assert.ok(label, 'the shortened label is measured');
+    const onLabel = await run({ top: label.top - 0.02, bottom: label.bottom + 0.02, left: label.left - 0.02, right: label.right + 0.02 }, shotLayout.get(shots[0])!.shortened.length ? 0 : 1);
+    assert.equal(onLabel.status, 'pass');
+    const real = await run({ top: 0.4, bottom: 0.5, left: 0.6, right: 0.8 });
+    assert.equal(real.status, 'fail');
+});
+
+test('helpControls: a chat assistant, a guide and a "?" are help; a product word that only contains one is not', async () => {
+    after(closeBrowser);
+    const { launch, helpControls } = await import('../src/browser.ts');
+    const page = await (await launch()).newPage({ viewport: { width: 800, height: 600 } });
+    await page.setContent(`<body><button aria-label="Ask FlowMS" style="position:fixed;right:10px;bottom:10px">💬</button>
+        <a href="/learn">Learn</a> <a href="/ind">Indicator Guide</a> <button title="?">?</button>
+        <button>Resistance &amp; Support</button> <button>Only prints at or above the ask</button>
+        <a href="/help" style="display:none">Help</a> <a href="/faq" style="position:absolute;top:2000px">FAQ</a></body>`);
+    assert.deepEqual(await helpControls(page), ['Ask FlowMS', 'Learn', 'Indicator Guide', '?']);
+    await page.close();
+});
+
+test('itemStarts: a menu whose items start together is in line when Jev is unsure; an indented item, or a sure fail, is not passed', async () => {
+    after(closeBrowser);
+    const { launch, itemStarts } = await import('../src/browser.ts');
+    const page = await (await launch()).newPage({ viewport: { width: 800, height: 600 } });
+    const menu = (pad: string[], dir = 'column') => page.setContent(`<div role="menu" data-tapcheck-popup style="display:flex;flex-direction:${dir};width:260px">${pad.map((p, i) => `<div role="menuitem" style="padding:8px 8px 8px ${p}">Item ${i + 1}</div>`).join('')}</div>`);
+    await menu(['12px', '12px', '12px']);
+    assert.deepEqual(await itemStarts(page), { n: 3, spread: 0 });
+    await menu(['12px', '22px']);
+    assert.deepEqual(await itemStarts(page), { n: 2, spread: 10 });
+    await menu(['12px', '12px'], 'row');
+    assert.ok((await itemStarts(page))!.spread > 40, 'items in a row are not one column');
+    await page.close();
+
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-starts-`);
+    setup({ budget: 1, headers: {} }, { systemOne: async ({ questions }) => ({ answers: Object.fromEntries(Object.keys(questions).map((k) => [k, { box: { top: 0, bottom: 1, left: 0, right: 1 } }])), usage: { input_tokens: 1 } }) });
+    const judge = async (p: number, starts: { n: number; spread: number }) => {
+        const found: Omit<Finding, 'side'>[] = [];
+        await ux.visual({ dir: tmp, record: (f: Omit<Finding, 'side'>) => { found.push(f); } } as unknown as Run, 'audit', 'Map › Sort', { misaligned: { noul: p } }, [], { starts });
+        return [found[0].status, found[0].detail!.includes('(measured)')];
+    };
+    assert.deepEqual(await judge(0.32, { n: 2, spread: 0 }), ['pass', true]);
+    assert.deepEqual(await judge(0.32, { n: 2, spread: 10 }), ['warn', false]);
+    assert.deepEqual(await judge(0.9, { n: 2, spread: 0 }), ['fail', false]);
 });

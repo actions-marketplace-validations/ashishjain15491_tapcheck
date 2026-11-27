@@ -13,7 +13,30 @@
   costs a few Jev calls per failing screen, within the budget.
 - **usability** says why a click failed (what covered the control, or that it was hidden or moving), at which step and
   where, and adds the screen it stopped on; a dead click names its step, place and screen; hesitation and "not
-  reached" say in words what Jev judged.
+  reached" say in words what Jev judged. Clicking the control that brought the user to this screen again, or the one
+  marked as selected, isn't a dead click.
+- **Unsure answers say what to look for.** A Jev warning between "no" and "yes" reads "Jev is unsure (yes 55%). Look
+  for: …" with the defect it may be, rather than the description of the answer it leaned to.
+- **A menu or dialog is asked about itself.** `audit` asks an opened menu or dialog whether its own items overlap,
+  are cut off or out of line; the page behind it, covered on purpose and cut at the edges of tapcheck's cut-out of it,
+  isn't part of the question, and Jev boxes a fault in the menu, not the page.
+- **What the question excludes is measured.** As each slice is taken, tapcheck records the rows that scroll sideways (a
+  rail of chips with a › button, a wide table), text shortened with "…", and small controls fixed over the page (a chat
+  button). A cut Jev boxes at the end of such a row or on shortened text passes and says so; one under a fixed control
+  is a warning, covered only until the page scrolls; anything else still fails.
+- **A menu's items, measured in line.** When Jev is unsure whether an opened menu's items line up and their text is
+  measured starting within 2 px of each other, the check passes and says so; a clear "out of line" still fails.
+- **A help button is help.** The help heuristic counts a chat or assistant bubble, a "?" icon and a link to a guide;
+  and when Jev still says no, a visible control named as help ("Ask …", "Help", "FAQ", "Learn", "… guide") passes it,
+  measured, naming the control.
+- **Banners say what the finding says.** A marked screenshot's banner goes through the `expect` rules too, so an
+  accepted finding reads "EXPECTED: …" with its reason, in blue, not "FAIL"; and it names the check as the check
+  ("FAILED CHECK: text is not cut off"), so a name that says what should be true doesn't read as the opposite of
+  its boxes. The page's animations (a sidebar closing after the Tab checks) settle before it is taken.
+- **Banners cut their text at a word,** ending with "…".
+- **A menu's cut-out isn't the app's cut.** When the only text Jev boxes as cut off on a menu or dialog sits at the
+  edge of tapcheck's cut-out of it, the finding is a warning that says the cut may be the crop's; the boxing questions
+  carry the same note the first question did.
 
 ## 0.1.4 (2026-11-27)
 

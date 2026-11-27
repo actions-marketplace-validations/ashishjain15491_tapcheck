@@ -122,6 +122,9 @@ async function attempt(r: Run, page: Page, t: Task, vh: number) {
         if (g.irreversible.noul > NO) { note = `stopped before "${pick.c.label}": it may change data (p=${g.irreversible.noul.toFixed(2)})`; break; }
         const from = page.url();
         const before = await page.evaluate(() => document.body.innerHTML.length);
+        // Nothing to do is not dead: the control marked as the selected one, or the one that brought the user here.
+        const on = clicks.some((c) => c.label === pick.c.label && c.to === from) || await visible[pick.i].evaluate((e) =>
+            ['aria-selected', 'aria-pressed', 'aria-checked'].some((a) => e.getAttribute(a) === 'true') || (e.getAttribute('aria-current') ?? 'false') !== 'false').catch(() => false);
         const requests: Req[] = [];
         const onResponse = (res: Response) => { if (['xhr', 'fetch', 'document'].includes(res.request().resourceType())) requests.push({ method: res.request().method(), url: res.url(), status: res.status() }); };
         page.on('response', onResponse);
@@ -144,8 +147,8 @@ async function attempt(r: Run, page: Page, t: Task, vh: number) {
         await page.mouse.move(page.viewportSize()!.width - 1, 0);
         await page.waitForTimeout(300);
         const c = pick.c;
-        const dead = to === from && Math.abs(after - before) < 20 && !requests.length;
-        if (dead || c.typing) tried.add(`${from}|${a.pick.choice}`);
+        const dead = to === from && Math.abs(after - before) < 20 && !requests.length && !on;
+        if (dead || on || c.typing) tried.add(`${from}|${a.pick.choice}`);
         clicks.push({ step, label: c.typing ? `typed "${t.text}" into ${c.label}` : c.label, place: place(c), x: Math.round(c.x + c.w / 2), y: Math.round(c.y + c.h / 2), from, to,
             // Focusing a field changes nothing on screen by design, so only buttons and links can be dead clicks.
             ms: Date.now() - t0, dead: !c.typing && !['input', 'select', 'textarea'].includes(c.tag) && dead,

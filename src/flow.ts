@@ -237,7 +237,7 @@ export class T {
         this.alive();
         const page = this.current;
         const draw = this.r.cfg.marks && page && !page.isClosed() && (status !== 'pass' || this.r.scoped || !!this.flow.item);
-        const shot = draw ? await marked(this.r, page, `${this.flow.part} ${check}`, { status, title: check, detail }, marks) : undefined;
+        const shot = draw ? await marked(this.r, page, `${this.flow.part} ${check}`, { status, title: check, detail, of: { suite: this.flow.part, where: this.flow.name } }, marks) : undefined;
         this.record({ suite: this.flow.part, where: this.flow.name, check, status, detail, evidence: shot ? [shot] : undefined });
     }
 

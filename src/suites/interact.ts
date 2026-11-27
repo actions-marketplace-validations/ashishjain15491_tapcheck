@@ -307,7 +307,7 @@ export async function run(r: Run) {
                 const now = r.cfg.marks && (broke.length || failed.length || native.length || dead.length) ? await open(r, page, path).then(() => tag(page, own, r.cfg.crawl.skip)).catch(() => []) : [];
                 const shoot = async (check: string, status: Status, detail: string | undefined, labels: string[], note: string) => {
                     const marks = status === 'pass' ? [] : now.filter((c) => labels.includes(c.label)).map((c) => ({ target: `[data-tapcheck="${c.i}"]`, note }));
-                    return marks.length ? marked(r, page, `interact ${path} ${check}`, { status, title: check, detail: `${path} · ${detail}` }, marks) : undefined;
+                    return marks.length ? marked(r, page, `interact ${path} ${check}`, { status, title: check, detail: `${path} · ${detail}`, of: { suite: S, where: path } }, marks) : undefined;
                 };
                 const rec = async (check: string, status: Status, detail: string | undefined, labels: string[], note: string) => {
                     const shot = await shoot(check, status, detail, labels, note);

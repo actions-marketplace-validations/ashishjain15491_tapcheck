@@ -81,7 +81,7 @@ test('marked: a banner, a box, a marker and a note per target, at most eight, dr
     const boxes = shot.parts.filter((p) => !p.text), notes = shot.parts.filter((p) => /^\d+ \D/.test(p.text)), dots = shot.parts.filter((p) => /^\d+$/.test(p.text));
     // Twelve targets (ten lines, the total, the plain box): eight are drawn, the banner counts the rest. It goes above the
     // screenshot, so it covers none of the page.
-    assert.equal(shot.banner.text, 'FAIL: the cart total equals the sum of the lines (+4 more)\nexpected 30.00, shown 33.00');
+    assert.equal(shot.banner.text, 'FAILED CHECK: the cart total equals the sum of the lines (+4 more)\nexpected 30.00, shown 33.00');
     assert.equal(shot.banner.bg, RED);
     assert.deepEqual(size(file!), [shot.vw, shot.vh + Math.round(shot.banner.height)]);
     // No marker or note covers another, though the ten lines are close together.
@@ -98,12 +98,20 @@ test('marked: a banner, a box, a marker and a note per target, at most eight, dr
 
     // A mark's own kind colours it; a selector that matches nothing is no box.
     await marked(r, page, 'kinds', { status: 'pass', title: 'kinds' }, [{ target: 'h1', note: 'the heading', kind: 'setting' }, { target: { x: 10, y: 300, width: 50, height: 20 }, note: 'ask', kind: 'question' }, { target: '.gone' }]);
-    assert.equal(seen[1].banner.text, 'PASS: kinds');
+    assert.equal(seen[1].banner.text, 'PASSED CHECK: kinds');
+
+    // A finding an `expect` rule accepts says so on its banner, with the reason, not FAILED CHECK.
+    const rules = r.cfg.expect;
+    r.cfg.expect = [{ match: /^audit: text is not cut off @ Map/, why: 'tiles shorten labels' }];
+    try {
+        await marked(r, page, 'expected', { status: 'fail', title: 'text is not cut off', detail: 'Map · 2: "NTES"', of: { suite: 'audit', where: 'Map · desktop' } }, [{ target: 'h1' }]);
+    } finally { r.cfg.expect = rules; }
+    assert.match(seen[2].banner.text, /^EXPECTED: text is not cut off\nexpected: tiles shorten labels \(was fail: Map · 2: "NTES"\)$/);
 
     // Small targets close together, as the icons in a table's rows: no marker or note covers another, or another target.
     const tight = [0, 1, 2].flatMap((row) => [0, 1].map((col) => ({ x: 200 + col * 20, y: 200 + row * 30, width: 14, height: 14 })));
     await marked(r, page, 'tight', { status: 'fail', title: 'targets at least 24 px' }, tight.map((b) => ({ target: b, note: `${b.width}×${b.height} px` })));
-    const drawn = seen[2].parts.filter((p) => p.text);
+    const drawn = seen[3].parts.filter((p) => p.text);
     assert.equal(drawn.length, 12);
     for (const a of drawn) {
         for (const b of drawn) assert.ok(a === b || a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y, `${a.text} and ${b.text} overlap`);
@@ -237,4 +245,11 @@ test('t.mark, t.untested and verify flows: marked evidence, the verify tag, and 
     record({ suite: 'crawl', side: 'public', where: '/', check: 'page answers', status: 'pass' });
     write(tmp, { base: cfg.baseUrl, started: Date.now() });
     assert.ok(!readFileSync(`${tmp}/REPORT.md`, 'utf8').includes('Release verification') && !readFileSync(`${tmp}/report.html`, 'utf8').includes('Release verification'));
+});
+
+test('banners: a long detail is cut at a word and ends with "…"', async () => {
+    const { clip } = await import('../src/browser.ts');
+    assert.equal(clip('nothing to scroll, so part of it can\'t be seen', 40), 'nothing to scroll, so part of it can\'t…');
+    assert.equal(clip('short', 40), 'short');
+    assert.equal(clip('so part of it can\'t be seen. · screenshot 1 of 2', 32), 'so part of it can\'t be seen.…', 'no separator left before the "…"');
 });

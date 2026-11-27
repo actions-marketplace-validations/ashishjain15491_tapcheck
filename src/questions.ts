@@ -34,6 +34,26 @@ export const VISUAL = {
     }),
 };
 
+// An opened menu or dialog, cut out of the screen (src/suites/audit.ts popupShot): the questions about what is drawn ask
+// about the menu or dialog alone. The page behind it is covered on purpose, and what of it shows at the image's edges is
+// cut by the cut-out, not by the app.
+const BEHIND = "The page behind it doesn't count: it is covered on purpose where the menu or dialog lies over it, and cut by the image's edges, which are tapcheck's cut-out, not the app's.";
+export const POPUP_VISUAL = {
+    ...VISUAL,
+    overlap: noul('In `screenshots`, do any texts or controls of the menu or dialog that opened overlap each other?', {
+        true: "Two of the menu's or dialog's own items, or an item and its text, are drawn on top of each other so part of one is hidden or hard to read.",
+        false: `Every item of the menu or dialog has its own space. ${BEHIND}`,
+    }),
+    clipped: noul('In `screenshots`, is any text or control of the menu or dialog that opened cut off?', {
+        true: "An item, label, button or field of the menu or dialog itself is cut off by the menu's or dialog's own edge, with no \"…\" and nothing to scroll, so part of it can't be seen.",
+        false: `All of the menu's or dialog's own items are fully visible, or shortened with "…", or in a list that scrolls inside it. ${BEHIND}`,
+    }),
+    misaligned: noul('In `screenshots`, are items of the menu or dialog that opened visibly out of line with each other?', {
+        true: "An edge or baseline of the menu's or dialog's own items that should match its neighbours is visibly off.",
+        false: `The menu's or dialog's items line up along their edges, centres or baselines. ${BEHIND}`,
+    }),
+};
+
 // ───────────────────────────── EMAIL (t.mail.judge in flows) ─────────────────────────────
 // `screenshot` is the email as a mail program on a computer shows it, `screenshot_mobile` the same email at a phone's width.
 export const EMAIL = {
@@ -149,7 +169,7 @@ export const HEURISTICS = (audience: string, context?: string) => ({
         "Everything shown helps with the screen's job and nothing else is there.",
     ]),
     h10_help: noul('Do `screenshots` show help for a person who gets stuck, such as a help link, an explanation or an example?', {
-        true: 'A help link, a hint, a short explanation or an example is visible where a person might get stuck.',
+        true: 'A help link, a hint, a short explanation or an example is visible where a person might get stuck, or a button that opens help: a chat or assistant bubble (often round, in a corner), a "?" icon, or a link to a guide.',
         false: 'No help, hint or explanation is visible anywhere on the screen.',
     }),
 });

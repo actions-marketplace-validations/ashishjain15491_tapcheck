@@ -79,7 +79,7 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
   from its screenshot, on the failing parts only (`RECORD=1 ONLY=flow-checkout`): it makes runs slower and the run
   folder larger.
 - `MARK=1` (or `marks: true` in `tapcheck.yml`) puts a marked screenshot first in the evidence of each failing or
-  warning finding: a banner saying the check, and a box and a note on each element the check found (`audit`, `a11y`,
+  warning finding: a banner saying the check ("FAILED CHECK: …", or "EXPECTED: …" when an `expect` rule accepts it), and a box and a note on each element the check found (`audit`, `a11y`,
   `crawl`, `interact`, a flow's `t.mark`); what Jev judged gets the banner alone, on each of its first three
   screenshots. Use it when the report is for people to read; it adds screenshots, not checks.
 - `TAPCHECK_CONFIG=path` uses another config file.

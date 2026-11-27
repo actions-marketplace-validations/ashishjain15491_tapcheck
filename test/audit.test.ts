@@ -62,7 +62,9 @@ test('audit: button sizes, cut-off text, a white background in dark mode, token 
     // The menu the markup announces is opened and measured, and Jev looks at the screen and at the menu.
     assert.match(at('Home › More', 'fits on the screen'), /^fail: 1: it spans -50,200/);
     assert.deepEqual(asked.map((q) => q.includes('loaded')), [true, false]);
-    assert.deepEqual([at('Home · desktop', 'visual: loaded'), at('Home › More', 'visual: overlap')], [`pass: "Do the screenshots show the screen's main content, fully loaded?" Jev: yes (90% sure)`, `pass: "In the screenshots, do any texts or controls overlap each other?" Jev: no (90% sure)`]);
+    assert.deepEqual([at('Home · desktop', 'visual: loaded'), at('Home › More', 'visual: overlap')], [`pass: "Do the screenshots show the screen's main content, fully loaded?" Jev: yes (90% sure)`, `pass: "In the screenshots, do any texts or controls of the menu or dialog that opened overlap each other?" Jev: no (90% sure)`]);
+    // A menu is asked about itself: the page behind it, covered or cut at the cut-out's edge, is not part of the question.
+    assert.match(at('Home › More', 'visual: clipped'), /^pass: "In the screenshots, is any text or control of the menu or dialog that opened cut off\?"/);
     assert.deepEqual(found.filter((f) => f.status === 'info').map((f) => f.check), []);
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(`${tmp}/audit.json`, 'utf8')).screens[0].views), ['desktop', 'menu "More"', 'dark', 'tablet', 'phone']);
 });

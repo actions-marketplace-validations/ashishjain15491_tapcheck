@@ -6,7 +6,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Locator, type Page } from 'playwright';
 import type { Config, Screen, Side } from './config.ts';
-import type { Finding } from './report.ts';
+import { expected, type Finding } from './report.ts';
 
 export type Viewport = Config['viewports'][number];
 export type Hit = { url: string; method: string; type: string; status: number; contentType: string; ms: number; bytes: number; page: string; json?: 'ok' | 'invalid'; body?: string; keys?: string[] }; // keys: a JSON body's top-level keys, from the whole body (body is its first 400 characters)
@@ -288,6 +288,58 @@ export async function resolve(r: Run, page: Page, s: Screen): Promise<string | n
  * app shell with its content in a scrolling main area), the largest such panel is scrolled instead, a panel's height at
  * a time: a document that scrolls a few pixels would give the same screen twice.
  */
+type Frac = { left: number; right: number; top: number; bottom: number };
+/**
+ * What is in the window as it is now, as fractions of it (as Jev's boxes are): the rows that scroll sideways (a rail of
+ * chips with a › button, a wide table), the small controls fixed in place over the page (a chat button), and text
+ * shortened on purpose (an ellipsis by CSS, or "…" in the text itself).
+ */
+export const layout = (page: Page) => page.evaluate(() => {
+    const rails: Frac[] = [], floaters: Frac[] = [], shortened: Frac[] = [];
+    const frac = (b: DOMRect) => ({ left: b.left / innerWidth, right: b.right / innerWidth, top: b.top / innerHeight, bottom: b.bottom / innerHeight });
+    for (const el of document.querySelectorAll('body *')) {
+        const s = getComputedStyle(el), b = el.getBoundingClientRect();
+        if (b.width === 0 || b.height === 0 || b.bottom <= 0 || b.top >= innerHeight || s.visibility === 'hidden') continue;
+        if (/auto|scroll|hidden/.test(s.overflowX) && el.scrollWidth > el.clientWidth + 4 && b.width >= 100) rails.push(frac(b));
+        if (s.position === 'fixed' && b.width < innerWidth * 0.4 && b.height < innerHeight * 0.3) floaters.push(frac(b));
+        const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
+        if (own && ((s.textOverflow === 'ellipsis' && el.scrollWidth > el.clientWidth) || /(…|\.\.\.)$/.test(own))) shortened.push(frac(b));
+    }
+    return { rails, floaters, shortened };
+}).catch(() => ({ rails: [] as Frac[], floaters: [] as Frac[], shortened: [] as Frac[] }));
+/**
+ * The visible controls in the window whose name says they open help: "Help", "FAQ", "Ask …" (an assistant), "Chat",
+ * "Learn", "… guide", "?". Whole names only, so a word of the product's own ("support" as a price level) doesn't count.
+ */
+export const helpControls = (page: Page) => page.evaluate(() => [...new Set([...document.querySelectorAll('a[href], button, [role=button], summary')].flatMap((el) => {
+    const b = el.getBoundingClientRect(), s = getComputedStyle(el);
+    if (b.width === 0 || b.height === 0 || b.bottom <= 0 || b.top >= innerHeight || b.right <= 0 || b.left >= innerWidth || s.visibility === 'hidden') return [];
+    const name = (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').replace(/\s+/g, ' ').trim();
+    return /^(help|faq|support|contact( us)?|chat|docs?|documentation|tutorials?|learn(ing)?|getting started|how it works)\b|^ask\b|\bguide$|^\?$/i.test(name) && name.length <= 40 ? [name] : [];
+}))]).catch(() => [] as string[]);
+
+/**
+ * Where the text of each item of the opened menu or dialog ([data-tapcheck-popup]) starts: the items that hold no other
+ * item, with how many there are and how far apart their starts are, in px. Items laid out in a row are far apart, so
+ * only a column whose items start together reads as in line.
+ */
+export const itemStarts = (page: Page) => page.evaluate(() => {
+    const root = document.querySelector('[data-tapcheck-popup]');
+    if (!root) return null;
+    const ITEM = '[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=option],li,button,a';
+    const items = [...root.querySelectorAll(ITEM)].filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && !el.querySelector(ITEM); });
+    if (items.length < 2) return null;
+    const starts = items.map((el) => {
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) if (n.textContent?.trim()) { const r = document.createRange(); r.selectNodeContents(n); return r.getBoundingClientRect().left; }
+        return el.getBoundingClientRect().left;
+    });
+    return { n: items.length, spread: Math.round(Math.max(...starts) - Math.min(...starts)) };
+}).catch(() => null);
+
+/** layout() at the moment each slice was taken, by its file: Jev's boxes on a slice are read against it. */
+export const shotLayout = new Map<string, Awaited<ReturnType<typeof layout>>>();
+
 export async function slices(r: Run, page: Page, key: string, height: number, vh: number, max = 3) {
     mkdirSync(`${r.dir}/shots`, { recursive: true });
     const panel = height >= vh * 1.25 ? null : await page.evaluate(() => {
@@ -309,6 +361,7 @@ export async function slices(r: Run, page: Page, key: string, height: number, vh
         await page.waitForTimeout(250);
         const file = `${r.dir}/shots/${key}-${i + 1}.png`;
         await page.screenshot({ path: file });
+        shotLayout.set(file, await layout(page));
         out.push(file);
     }
     await page.evaluate((at) => {
@@ -420,7 +473,7 @@ function draw({ marks, max }: { marks: Drawn[]; max: number }) {
         if (!b.note) continue;
         // The note: right of the box (or of a marker beside it), left of it, at the right end inside it (a row as wide as the
         // window), under it or above it.
-        const n = add(`max-width:300px;padding:3px 8px;border-radius:3px;background:${b.colour};border:1px solid #fff`, `${i + 1} ${b.note.slice(0, 90)}`);
+        const n = add(`max-width:300px;padding:3px 8px;border-radius:3px;background:${b.colour};border:1px solid #fff`, `${i + 1} ${b.note.length > 90 ? `${b.note.slice(0, 90).replace(/\s+\S*$/, '')}…` : b.note}`);
         const s = n.getBoundingClientRect();
         const at = place(s.width, s.height, [[b.x + b.width + 8, b.y], [b.x + b.width + 32, b.y], [b.x - 8 - s.width, b.y], [b.x - 32 - s.width, b.y], [b.x + b.width - s.width - 6, b.y], [b.x, b.y + b.height + 6], [b.x, b.y - 6 - s.height]]
             .filter(([x], k) => k > 4 || (x >= 0 && x + s.width <= vw && (k < 4 || b.width > 2 * s.width))) as [number, number][], i);
@@ -430,13 +483,17 @@ function draw({ marks, max }: { marks: Drawn[]; max: number }) {
     return all.length - shown.length; // past the cap, or not on this screen
 }
 
+/** `s` cut to `n` characters at a word, with "…" when anything was left out. */
+export const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n).replace(/\s+\S*$/, '').replace(/[\s·,;:—-]+$/, '')}…`);
 let blank: Page | undefined; // where a screenshot gets its banner: a page of its own, so the app's own page is never covered
 /** `png` with a banner above it, in the status's colour, saying the check and its detail; written to `file`. */
 async function frame(png: Buffer, file: string, banner: { status: Finding['status']; title: string; detail?: string }, more = 0) {
     if (!blank || blank.isClosed()) blank = await (await (await launch()).newContext({ deviceScaleFactor: 1 })).newPage();
     const esc = (t: string) => t.replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`);
-    const title = `${banner.status.toUpperCase()}: ${banner.title}`.slice(0, 160) + (more ? ` (+${more} more)` : '');
-    const detail = (banner.detail ?? '').slice(0, 260);
+    // The check's name says what should be true ("text is not cut off"), so the banner says it is the check that failed.
+    const said = (banner as { expected?: boolean }).expected ? 'EXPECTED' : { fail: 'FAILED CHECK', warn: 'CHECK TO REVIEW', info: 'INFO', pass: 'PASSED CHECK' }[banner.status];
+    const title = clip(`${said}: ${banner.title}`, 160) + (more ? ` (+${more} more)` : '');
+    const detail = clip(banner.detail ?? '', 260);
     await blank.setContent(`<body style="margin:0;background:#fff"><div id="tapcheck-banner" style="padding:10px 16px;background:${COLOUR[KIND[banner.status]]};color:#fff;font:600 18px/1.3 system-ui,sans-serif">${esc(title)}${detail ? `<div style="font:400 14px/1.35 system-ui,sans-serif;margin-top:2px">${esc(detail)}</div>` : ''}</div><img style="display:block" src="data:image/png;base64,${png.toString('base64')}">`);
     const width = await blank.evaluate(async () => { const i = document.images[0]; await i.decode(); return i.naturalWidth; });
     await blank.setViewportSize({ width, height: 200 });
@@ -451,8 +508,13 @@ async function frame(png: Buffer, file: string, banner: { status: Finding['statu
  * screenshot is an extra, and never fails the check it shows.
  */
 const name = (r: Run, label: string) => `${r.dir}/shots/marked-${String(++shotNo).padStart(3, '0')}-${slug(label)}.png`;
-export async function marked(r: Run, page: Page, label: string, banner: { status: Finding['status']; title: string; detail?: string }, marks: Mark[] = []): Promise<string | undefined> {
+export async function marked(r: Run, page: Page, label: string, banner: { status: Finding['status']; title: string; detail?: string; of?: { suite: string; where: string } }, marks: Mark[] = []): Promise<string | undefined> {
     const file = name(r, label);
+    // The banner says what the finding will say: an `expect` rule that matches makes it an expected info row.
+    if (banner.of && r.cfg.expect?.length) {
+        const f = expected({ suite: banner.of.suite, side: '', where: banner.of.where, check: banner.title, status: banner.status, detail: banner.detail }, r.cfg.expect);
+        if (f.status !== banner.status) banner = { ...banner, status: f.status, detail: f.detail, expected: true } as typeof banner;
+    }
     let at: number[] | undefined;
     try {
         mkdirSync(`${r.dir}/shots`, { recursive: true });
@@ -474,6 +536,9 @@ export async function marked(r: Run, page: Page, label: string, banner: { status
             }
             return at;
         }, marks.length);
+        // What is still moving (a sidebar closing after focus left it) settles first; endless ones (a spinner) are left.
+        await page.evaluate(() => Promise.race([Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => {}))),
+            new Promise((done) => setTimeout(done, 1000))])).catch(() => {});
         const more = await page.evaluate(draw, { marks: list, max: MAX_MARKS });
         const png = await page.screenshot();
         await frame(png, file, banner, more);

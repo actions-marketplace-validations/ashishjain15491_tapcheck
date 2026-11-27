@@ -107,7 +107,7 @@ export async function run(r: Run) {
             r.record({ suite: S, where, check: `loads under ${SLOW_MS} ms`, status: ms < SLOW_MS ? 'pass' : 'warn', detail: `${ms} ms` });
             r.record({ suite: S, where, check: 'no console or page errors', status: errors.length ? 'fail' : 'pass', detail: errors.slice(0, 3).join(' | ') || undefined });
             // MARK=1: the elements a failing check tagged while it measured, boxed on the page as it is now.
-            const shot = async (check: string, detail: string, tag: string) => { const m = r.cfg.marks ? await marked(r, page, `crawl ${where} ${check}`, { status: 'fail', title: check, detail: `${where} · ${detail}` }, [{ target: `[data-tapcheck-mark-${tag}]` }]) : undefined; return m ? [m] : undefined; };
+            const shot = async (check: string, detail: string, tag: string) => { const m = r.cfg.marks ? await marked(r, page, `crawl ${where} ${check}`, { status: 'fail', title: check, detail: `${where} · ${detail}`, of: { suite: S, where } }, [{ target: `[data-tapcheck-mark-${tag}]` }]) : undefined; return m ? [m] : undefined; };
             if (f?.brokenImages.length) r.record({ suite: S, where, check: 'images load', status: 'fail', detail: f.brokenImages.slice(0, 5).join(', '), evidence: await shot('images load', f.brokenImages.slice(0, 5).join(', '), 'broken') });
             const unlabelled = await page.$$eval('input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea', (els) => els.filter((el) => {
                 const e = el as HTMLInputElement;

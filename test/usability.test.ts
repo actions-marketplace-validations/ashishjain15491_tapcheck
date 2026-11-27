@@ -44,7 +44,7 @@ test('usability: a flyout left open by the pointer covers nothing on the next st
     after(async () => { await closeBrowser(); server.close(); });
     const task = (name: string, goal: string) => ({ name, from: '/', goal, done: 'It is open.', notDone: 'Anything else.', optimal: 2 });
     const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, viewports: [{ name: 'desktop', width: 800, height: 600 }],
-        tasks: [task('Alerts', 'menu, past_alerts'), task('Trap', 'trap')] }, tmp);
+        tasks: [task('Alerts', 'menu, past_alerts'), task('Trap', 'trap'), task('Again', 'menu, menu')] }, tmp);
     const found: Omit<Finding, 'side'>[] = [];
     process.env.TYPESAFE_API_KEY = 'tsk-not-a-real-key-0123456789';
     try {
@@ -62,6 +62,9 @@ test('usability: a flyout left open by the pointer covers nothing on the next st
     assert.deepEqual([...new Set(offered)], ['The button that is an icon with no visible text (tooltip "Export list"), in the main area.']);
     assert.match(at('Trap:', 'task completed')[1]!, /^click failed on "Trap", in the main area \(step 1\): .*<div id="cover">banner<\/div> intercepts pointer events/);
     assert.doesNotMatch(at('Trap:', 'task completed')[1]!, /Call log/);
+    // The control that brought the user here, clicked again, has nothing to do: not a dead click.
+    assert.deepEqual(at('Again:', 'task completed'), ['pass', '2 click(s): Menu → Menu']);
+    assert.deepEqual(at('Again:', 'no dead clicks'), ['pass', undefined]);
 });
 
 test('usability: a side with no tasks is a skipped part, not a clean one', async () => {

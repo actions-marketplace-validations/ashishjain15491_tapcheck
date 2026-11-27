@@ -103,9 +103,13 @@ export const savePayloads = (dir: string) => writeFileSync(`${dir}/payloads.json
 type Q = { instructions?: unknown; criteria?: unknown };
 /** A question as a person reads it: its first sentence, with the request's field names put as words. */
 export const asked = (q: Q) => { const t = String(q.instructions ?? ''); return (t.match(/^.*?\?(?=\s|$)/)?.[0] ?? t).replace(/`(\w+)`/g, 'the $1'); };
-/** A yes-or-no answer in words: the question, Jev's lean, and (`full`, for a fail or warning) what that answer means. */
-export function sayNoul(q: Q, p: number, full = true) {
-    const yes = p >= 0.5, means = full && (q.criteria as Record<string, string> | undefined)?.[yes ? 'true' : 'false'];
+/** A yes-or-no answer in words: the question, Jev's lean, and (`full`, for a fail or warning) what that answer means.
+ * An unsure answer (between NO and YES) with `bad`, the answer that is the defect, says what to look for instead. */
+export function sayNoul(q: Q, p: number, full = true, bad?: boolean) {
+    const yes = p >= 0.5, criteria = q.criteria as Record<string, string> | undefined;
+    if (full && bad !== undefined && p > NO && p < YES)
+        return `"${asked(q)}" Jev is unsure (yes ${Math.round(p * 100)}%)${criteria ? `. Look for: ${criteria[String(bad)]}` : ''}`;
+    const means = full && criteria?.[yes ? 'true' : 'false'];
     return `"${asked(q)}" Jev: ${yes ? 'yes' : 'no'} (${Math.round((yes ? p : 1 - p) * 100)}% sure)${means ? `. ${yes ? 'Yes' : 'No'} means: ${means}` : ''}`;
 }
 /** A score in words: the question and (`full`) the description of the level the score is nearest to. */

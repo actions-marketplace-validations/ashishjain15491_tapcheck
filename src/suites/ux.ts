@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { box as locateQ } from '@typesafe-ai/sdk';
 import type { Page } from 'playwright';
 import { mainViewport, type Screen } from '../config.ts';
-import { abs, context, facts, launch, open, resolve, SessionExpired, slices, slug, watch, type Run } from '../browser.ts';
+import { abs, context, facts, helpControls, launch, open, resolve, SessionExpired, shotLayout, slices, slug, watch, type Run } from '../browser.ts';
 import { ask, bad, BudgetReached, FAIL_SCORE, good, img, looked, MIN_SCORE, NO, sayChoice, sayNoul, sayScore, scoreStatus, status, to10 } from '../jev.ts';
 import { ATTENTION, ATTENTION_CHECK, ATTENTION_MODEL, DESIGN, guerrilla, HEURISTICS, purposeKey, VISUAL } from '../questions.ts';
 
@@ -128,23 +128,23 @@ export async function drawBoxes(shot: string, boxes: { label: string; box: Box }
  * on its own), then Jev's box around it on each of those, drawn. A box over most of a slice points at nothing, so it
  * is left out. Locating costs Jev calls, so a budget reached or Jev unavailable leaves the rest unlocated.
  */
-async function locate(file: string, keys: string[], shots: string[]) {
-    const found: Record<string, string[]> = {};
+async function locate(file: string, keys: string[], shots: string[], note?: string, questions: Record<string, unknown> = VISUAL) {
+    const found: Record<string, { file: string; box: Box; slice: number }[]> = {};
     try {
         for (const [i, shot] of shots.slice(0, 4).entries()) {
             let here = keys;
             if (shots.length > 1) {
-                const a = await ask(`${file}-slice-${i + 1}`, { screenshots: [img(shot)] }, Object.fromEntries(keys.map((k) => [k, (VISUAL as any)[k]])), [shot]);
+                const a = await ask(`${file}-slice-${i + 1}`, { screenshots: [img(shot)], note }, Object.fromEntries(keys.map((k) => [k, (questions as any)[k]])), [shot]);
                 here = keys.filter((k) => a[k].noul > 0.5);
             }
             if (!here.length) continue;
-            const at = await ask(`${file}-where-${i + 1}`, img(shot), Object.fromEntries(here.map((k) => [k, locateQ(LOCATE[k])])), [shot], ATTENTION_MODEL);
+            const at = await ask(`${file}-where-${i + 1}`, img(shot), Object.fromEntries(here.map((k) => [k, locateQ(questions === VISUAL ? LOCATE[k] : `In the menu or dialog that opened, not the page behind it: ${LOCATE[k].toLowerCase()}`)])), [shot], ATTENTION_MODEL);
             for (const k of here) {
                 const b: Box | undefined = at[k]?.box;
                 if (!b || (b.right - b.left) * (b.bottom - b.top) > 0.6) continue;
                 const out = `${file}-where-${k}-${i + 1}.png`;
                 await drawBoxes(shot, [{ label: `${k.replace('_', ' ')} (Jev's box)`, box: b }], out);
-                (found[k] ??= []).push(out);
+                (found[k] ??= []).push({ file: out, box: b, slice: i });
             }
         }
     } catch {
@@ -154,16 +154,45 @@ async function locate(file: string, keys: string[], shots: string[]) {
 }
 
 /** One finding per VISUAL question in `a` (the audit suite asks them too, of screens and of opened dialogs and menus).
- * The detail says what was asked and what the answer means; a failing defect is boxed where Jev places it. */
-export async function visual(r: Run, suite: string, where: string, a: Record<string, { noul: number }>, shots: string[]) {
+ * The detail says what was asked and what the answer means; a failing defect is boxed where Jev places it. `note` is
+ * what Jev was told about the screenshots; `crop`: they are tapcheck's cut-out of an opened menu or dialog, so a cut
+ * Jev boxes at their edge may be the crop's, and is a warning that says so. */
+export async function visual(r: Run, suite: string, where: string, a: Record<string, { noul: number }>, shots: string[], o: { note?: string; crop?: boolean; questions?: Record<string, unknown>; starts?: { n: number; spread: number } | null } = {}) {
+    const asked = o.questions ?? VISUAL; // the questions `a` answers, worded for a screen or for an opened menu or dialog
     const all = [['loaded', false], ['error_shown', true], ['overlap', true], ['clipped', true], ['raw_key', true], ['misaligned', true]] as const;
     const failing = all.filter(([k, defect]) => a[k] && defect && bad(a[k].noul) === 'FAIL').map(([k]) => k);
-    const boxed = failing.length ? await locate(`${r.dir}/shots/${slug(`${suite} ${where}`)}`, failing, shots) : {};
+    const boxed = failing.length ? await locate(`${r.dir}/shots/${slug(`${suite} ${where}`)}`, failing, shots, o.note, asked) : {};
+    // Read against what was measured on the slice when it was taken: a cut at the end of a row that scrolls sideways is
+    // what the question says is not cut off; content under a small
+    // control fixed over the page (a chat button) is covered only until the page scrolls.
+    const area = (b: Box) => Math.max(0, b.right - b.left) * Math.max(0, b.bottom - b.top);
+    const shared = (a: Box, b: Box) => area({ left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), top: Math.max(a.top, b.top), bottom: Math.min(a.bottom, b.bottom) });
+    const kind = (s: { box: Box; slice: number }) => {
+        const l = shotLayout.get(shots[s.slice]);
+        // On a row: the box's middle within the row's height (Jev's box is often taller than a 24 px row of chips), half
+        // its width on the row, and at one of the row's ends.
+        const mid = (s.box.top + s.box.bottom) / 2, wide = (q: Box) => Math.max(0, Math.min(s.box.right, q.right) - Math.max(s.box.left, q.left)) >= (s.box.right - s.box.left) / 2;
+        if (l?.rails.some((q) => mid >= q.top - 0.01 && mid <= q.bottom + 0.01 && wide(q) && (Math.abs(s.box.right - q.right) < 0.04 || Math.abs(s.box.left - q.left) < 0.04))) return 'rail';
+        // Text shortened on purpose ("…") inside the box: what the question says is not cut off.
+        if (l?.shortened.some((q) => { const x = (q.left + q.right) / 2, y = (q.top + q.bottom) / 2; return x >= s.box.left && x <= s.box.right && y >= s.box.top && y <= s.box.bottom; })) return 'rail';
+        if (l?.floaters.some((q) => shared(s.box, q) > Math.min(area(s.box), area(q)) * 0.3)) return 'floater';
+        return 'cut';
+    };
+    const edge = (b: Box) => b.left < 0.05 || b.top < 0.05 || b.right > 0.95 || b.bottom > 0.95; // within 5% of a side
     for (const [k, defect] of all) {
         if (!a[k]) continue;
         const v = defect ? bad(a[k].noul) : good(a[k].noul), seen = boxed[k];
-        const at = failing.includes(k as any) ? (seen ? ' · boxed where Jev places it (a prediction, check it)' : " · Jev couldn't point to one place: look through the screenshots") : '';
-        r.record({ suite, where, check: `visual: ${k.replace('_', ' ')}`, status: status(v), detail: `${sayNoul((VISUAL as any)[k], a[k].noul, v !== 'pass')}${at}`, evidence: [...(seen ?? []), ...shots] });
+        const cropped = o.crop && k === 'clipped' && seen?.every((s) => edge(s.box));
+        const kinds = !cropped && k === 'clipped' && seen?.length ? seen.map(kind) : [];
+        const scrolls = kinds.length > 0 && kinds.every((x) => x === 'rail'), floats = !scrolls && kinds.length > 0 && kinds.every((x) => x !== 'cut');
+        const at = failing.includes(k as any) ? (scrolls ? ' · boxed at the end of a row that scrolls sideways or on text shortened with "…" (measured), which the question does not count as cut off: check it'
+            : floats ? ' · boxed under a small control fixed over the page (measured, such as a chat button) or at the end of a row that scrolls sideways: covered only until the page scrolls, check what is behind it can be scrolled into view'
+            : cropped ? " · boxed at the edge of tapcheck's cut-out of the menu or dialog, so the cut may be the crop's, not the app's: check it on the full screen"
+            : seen ? ' · boxed where Jev places it (a prediction, check it)' : " · Jev couldn't point to one place: look through the screenshots") : '';
+        // Jev unsure whether a menu's items line up, and their text measured starting together: in line.
+        const inLine = k === 'misaligned' && v === 'unsure' && !!o.starts && o.starts.spread <= 2;
+        const lined = inLine ? ` · passes: the ${o.starts!.n} items' text starts within ${o.starts!.spread} px of each other (measured)` : '';
+        r.record({ suite, where, check: `visual: ${k.replace('_', ' ')}`, status: scrolls || inLine ? 'pass' : cropped || floats ? 'warn' : status(v), detail: `${sayNoul((asked as any)[k], a[k].noul, v !== 'pass', defect)}${at}${lined}`, evidence: [...(seen ?? []).map((s) => s.file), ...shots] });
     }
 }
 
@@ -226,7 +255,10 @@ export async function run(r: Run) {
                     const probs = Object.entries(a.density.probabilities ?? {}).map(([k, p]) => `${k} ${(p as number).toFixed(2)}`).join(', ');
                     r.record({ suite: S, where, check: 'design: density', status: a.density.choice === 'balanced' ? 'pass' : 'warn', detail: `${sayChoice(DESIGN.density, a.density)} (${probs})`, evidence: [shots[0]] });
                     for (const k of ['h1_status', 'h2_language', 'h4_consistency', 'h6_recognition', 'h8_minimalist'] as const) scored(r, where, `heuristic: ${k}`, heur[k], a[k], shots, k === 'h8_minimalist' ? PLAIN_PASSES : undefined);
-                    r.record({ suite: S, where, check: 'heuristic: h10_help', status: status(good(a.h10_help.noul)), detail: sayNoul(heur.h10_help, a.h10_help.noul, good(a.h10_help.noul) !== 'pass'), evidence: shots });
+                    // A control named as help on the first screen is help, whatever its look: measured, it passes and says which.
+                    const helps = good(a.h10_help.noul) === 'pass' ? [] : await helpControls(page);
+                    r.record({ suite: S, where, check: 'heuristic: h10_help', status: helps.length ? 'pass' : status(good(a.h10_help.noul)),
+                        detail: `${sayNoul(heur.h10_help, a.h10_help.noul, !helps.length && good(a.h10_help.noul) !== 'pass', false)}${helps.length ? ` · passes: help is on the screen (measured): ${helps.slice(0, 4).map((h) => `"${h}"`).join(', ')}` : ''}`, evidence: shots });
 
                     // Guerrilla five-second test, on the first screen only. It needs the screen's purpose; picking the job
                     // among the others needs at least one other screen with a purpose.
@@ -234,7 +266,7 @@ export async function run(r: Run) {
                         const others = [...new Set(screens.filter((x) => x.name !== s.name && x.purpose && x.purpose !== s.purpose).map((x) => x.purpose!))].slice(0, 6);
                         const gq = guerrilla(s.purpose, others), { purpose_pick, ...rest } = gq;
                         const g = await ask(`${key}-guerrilla`, { screenshot: img(shots[0]) }, others.length ? { ...rest, purpose_pick } : rest, [shots[0]]);
-                        r.record({ suite: S, where, check: 'guerrilla: purpose clear in 5s', status: status(good(g.purpose_clear.noul)), detail: sayNoul(gq.purpose_clear, g.purpose_clear.noul, good(g.purpose_clear.noul) !== 'pass'), evidence: [shots[0]] });
+                        r.record({ suite: S, where, check: 'guerrilla: purpose clear in 5s', status: status(good(g.purpose_clear.noul)), detail: sayNoul(gq.purpose_clear, g.purpose_clear.noul, good(g.purpose_clear.noul) !== 'pass', false), evidence: [shots[0]] });
                         if (others.length) {
                             const picked = g.purpose_pick.choice === purposeKey(s.purpose);
                             r.record({ suite: S, where, check: 'guerrilla: right job picked', status: picked ? 'pass' : 'fail', detail: picked ? undefined : `${sayChoice(purpose_pick, g.purpose_pick)}; its purpose is: ${s.purpose}`, evidence: [shots[0]] });

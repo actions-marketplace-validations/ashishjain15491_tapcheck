@@ -46,7 +46,7 @@ export async function run(r: Run) {
                         const v = res.violations.filter((x: any) => x.impact === impact);
                         const status = v.length ? (impact === 'moderate' ? 'warn' : 'fail') : 'pass', detail = v.map((x: any) => `${x.id} ×${x.nodes.length}`).join(', ') || undefined;
                         // MARK=1: axe's own selector for each node, with its rule as the note (a node inside a frame or a shadow root has no single selector).
-                        const shot = v.length && r.cfg.marks ? await marked(r, page, `a11y ${where} ${impact}`, { status, title: `axe: no ${impact} violations`, detail: `${where} · ${detail}` },
+                        const shot = v.length && r.cfg.marks ? await marked(r, page, `a11y ${where} ${impact}`, { status, title: `axe: no ${impact} violations`, detail: `${where} · ${detail}`, of: { suite: S, where } },
                             v.flatMap((x: any) => x.nodes.filter((n: any) => n.target.length === 1 && typeof n.target[0] === 'string').map((n: any) => ({ target: n.target[0] as string, note: x.id })))) : undefined;
                         r.record({ suite: S, where, check: `axe: no ${impact} violations`, status, detail, evidence: shot ? [shot] : undefined });
                     }
