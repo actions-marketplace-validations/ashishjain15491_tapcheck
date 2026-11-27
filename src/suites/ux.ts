@@ -16,10 +16,11 @@
  */
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { box as locateQ } from '@typesafe-ai/sdk';
 import type { Page } from 'playwright';
 import { mainViewport, type Screen } from '../config.ts';
-import { abs, context, facts, open, resolve, SessionExpired, slices, slug, watch, type Run } from '../browser.ts';
-import { ask, bad, BudgetReached, FAIL_SCORE, good, img, looked, MIN_SCORE, NO, scoreStatus, status, to10 } from '../jev.ts';
+import { abs, context, facts, launch, open, resolve, SessionExpired, slices, slug, watch, type Run } from '../browser.ts';
+import { ask, bad, BudgetReached, FAIL_SCORE, good, img, looked, MIN_SCORE, NO, sayChoice, sayNoul, sayScore, scoreStatus, status, to10 } from '../jev.ts';
 import { ATTENTION, ATTENTION_CHECK, ATTENTION_MODEL, DESIGN, guerrilla, HEURISTICS, purposeKey, VISUAL } from '../questions.ts';
 
 const S = 'ux';
@@ -33,11 +34,11 @@ const REVIEW_BELOW = 0.3;
 // level 2. Level 1 ("rough", "several parts add nothing") is the defect and still fails at 3.3: the fail mark is 4.4,
 // halfway between the two levels, so a score nearer level 1 fails and one just short of level 2 is a warning.
 const PLAIN_PASSES = { pass: 5.5, fail: 4.4 };
-function scored(r: Run, where: string, check: string, a: { score: number; confidence: number }, ev: string[], marks = { pass: MIN_SCORE, fail: FAIL_SCORE }) {
-    const v = to10(a.score);
+function scored(r: Run, where: string, check: string, q: any, a: { score: number; confidence: number }, ev: string[], marks = { pass: MIN_SCORE, fail: FAIL_SCORE }) {
+    const v = to10(a.score), st = scoreStatus(v, a.confidence, REVIEW_BELOW, marks.pass, marks.fail);
     const review = v < marks.pass && a.confidence < REVIEW_BELOW;
-    r.record({ suite: S, where, check, status: scoreStatus(v, a.confidence, REVIEW_BELOW, marks.pass, marks.fail),
-        detail: `${v}/10 (confidence ${a.confidence.toFixed(2)})${marks.pass === MIN_SCORE ? '' : ` · passes from ${marks.pass}`}${review ? ' · needs review: Jev was split' : ''}`, evidence: ev });
+    r.record({ suite: S, where, check, status: st,
+        detail: `${sayScore(q, a, st !== 'pass')}${marks.pass === MIN_SCORE ? '' : ` · passes from ${marks.pass}`}${review ? ' · needs review: Jev was split' : ''}`, evidence: ev });
 }
 
 /**
@@ -96,12 +97,73 @@ async function heatmap(page: Page, shot: string, looks: { label: string; box: Bo
     await p.close();
 }
 
-/** One finding per VISUAL question in `a` (the audit suite asks them too, of screens and of opened dialogs and menus). */
-export function visual(r: Run, suite: string, where: string, a: Record<string, { noul: number }>, shots: string[]) {
-    for (const [k, defect] of [['loaded', false], ['error_shown', true], ['overlap', true], ['clipped', true], ['raw_key', true], ['misaligned', true]] as const) {
+// What to box when a VISUAL defect is found, so the finding shows where it is.
+const LOCATE: Record<string, string> = {
+    error_shown: 'The error message.',
+    overlap: 'The texts or controls drawn on top of each other.',
+    clipped: 'The text or control that is cut off.',
+    raw_key: 'The raw translation key or unfilled placeholder shown instead of words.',
+    misaligned: 'The item that is out of line with its neighbours.',
+};
+const PNG = (file: string) => { const b = readFileSync(file); return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) }; };
+
+/** `shot` with each box drawn and labelled, rendered by the browser. */
+export async function drawBoxes(shot: string, boxes: { label: string; box: Box }[], out: string) {
+    const { width, height } = PNG(shot);
+    const page = await (await launch()).newPage({ viewport: { width, height } });
+    try {
+        const src = `data:image/png;base64,${readFileSync(shot).toString('base64')}`, spots = labelSpots(boxes, width, height);
+        const frames = boxes.map((l, i) => `<div style="position:absolute;left:${l.box.left * 100}%;top:${l.box.top * 100}%;width:${(l.box.right - l.box.left) * 100}%;height:${(l.box.bottom - l.box.top) * 100}%;`
+            + `border:3px solid #dc2626;border-radius:4px;box-shadow:0 0 0 9999px rgba(0,0,0,.25)"></div><b style="position:absolute;left:${spots[i].x}px;top:${spots[i].y}px;`
+            + `background:#dc2626;color:#fff;font:13px system-ui;padding:2px 6px;border-radius:4px;white-space:nowrap">${i + 1}. ${l.label}</b>`).join('');
+        await page.setContent(`<body style="margin:0"><div style="position:relative;width:${width}px;height:${height}px;background:url(${src}) 0 0/100% 100%;overflow:hidden">${frames}</div></body>`);
+        await page.screenshot({ path: out });
+    } finally {
+        await page.close();
+    }
+}
+
+/**
+ * Where on the screenshots each failing VISUAL defect is: with several slices, the slices that show it (asked of each
+ * on its own), then Jev's box around it on each of those, drawn. A box over most of a slice points at nothing, so it
+ * is left out. Locating costs Jev calls, so a budget reached or Jev unavailable leaves the rest unlocated.
+ */
+async function locate(file: string, keys: string[], shots: string[]) {
+    const found: Record<string, string[]> = {};
+    try {
+        for (const [i, shot] of shots.slice(0, 4).entries()) {
+            let here = keys;
+            if (shots.length > 1) {
+                const a = await ask(`${file}-slice-${i + 1}`, { screenshots: [img(shot)] }, Object.fromEntries(keys.map((k) => [k, (VISUAL as any)[k]])), [shot]);
+                here = keys.filter((k) => a[k].noul > 0.5);
+            }
+            if (!here.length) continue;
+            const at = await ask(`${file}-where-${i + 1}`, img(shot), Object.fromEntries(here.map((k) => [k, locateQ(LOCATE[k])])), [shot], ATTENTION_MODEL);
+            for (const k of here) {
+                const b: Box | undefined = at[k]?.box;
+                if (!b || (b.right - b.left) * (b.bottom - b.top) > 0.6) continue;
+                const out = `${file}-where-${k}-${i + 1}.png`;
+                await drawBoxes(shot, [{ label: `${k.replace('_', ' ')} (Jev's box)`, box: b }], out);
+                (found[k] ??= []).push(out);
+            }
+        }
+    } catch {
+        // ponytail: a failed locate only loses the box; the finding is still recorded with the whole screenshots.
+    }
+    return found;
+}
+
+/** One finding per VISUAL question in `a` (the audit suite asks them too, of screens and of opened dialogs and menus).
+ * The detail says what was asked and what the answer means; a failing defect is boxed where Jev places it. */
+export async function visual(r: Run, suite: string, where: string, a: Record<string, { noul: number }>, shots: string[]) {
+    const all = [['loaded', false], ['error_shown', true], ['overlap', true], ['clipped', true], ['raw_key', true], ['misaligned', true]] as const;
+    const failing = all.filter(([k, defect]) => a[k] && defect && bad(a[k].noul) === 'FAIL').map(([k]) => k);
+    const boxed = failing.length ? await locate(`${r.dir}/shots/${slug(`${suite} ${where}`)}`, failing, shots) : {};
+    for (const [k, defect] of all) {
         if (!a[k]) continue;
-        const v = defect ? bad(a[k].noul) : good(a[k].noul);
-        r.record({ suite, where, check: `visual: ${k.replace('_', ' ')}`, status: status(v), detail: `p=${a[k].noul.toFixed(2)}`, evidence: shots });
+        const v = defect ? bad(a[k].noul) : good(a[k].noul), seen = boxed[k];
+        const at = failing.includes(k as any) ? (seen ? ' · boxed where Jev places it (a prediction, check it)' : " · Jev couldn't point to one place: look through the screenshots") : '';
+        r.record({ suite, where, check: `visual: ${k.replace('_', ' ')}`, status: status(v), detail: `${sayNoul((VISUAL as any)[k], a[k].noul, v !== 'pass')}${at}`, evidence: [...(seen ?? []), ...shots] });
     }
 }
 
@@ -153,30 +215,31 @@ export async function run(r: Run) {
                     const a = await ask(key, { screen: s.name, viewport: `${vp.name}, ${vp.width} × ${vp.height} px`, screenshots: shots.map(img),
                         note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined },
                     { ...(audited ? {} : VISUAL), ...DESIGN, ...HEURISTICS(r.cfg.audience, r.cfg.context), ...ATTENTION_CHECK }, shots);
-                    visual(r, S, where, a, shots);
+                    await visual(r, S, where, a, shots);
                     // A screen Jev is clear has no main call to action isn't judged on one: the best it could score is a filter chip.
+                    const design = DESIGN as any, heur = HEURISTICS(r.cfg.audience, r.cfg.context) as any;
                     const noCta = a.has_cta.noul < NO ? `no main call to action on this screen (p=${a.has_cta.noul.toFixed(2)})` : '';
                     for (const k of ['cta', 'cta_label', 'negative_space', 'hierarchy', 'legibility', 'spacing'] as const) {
                         if (noCta && k.startsWith('cta')) r.record({ suite: S, where, check: `design: ${k.replace('_', ' ')}`, status: 'info', detail: noCta });
-                        else scored(r, where, `design: ${k.replace('_', ' ')}`, a[k], shots);
+                        else scored(r, where, `design: ${k.replace('_', ' ')}`, design[k], a[k], shots);
                     }
                     const probs = Object.entries(a.density.probabilities ?? {}).map(([k, p]) => `${k} ${(p as number).toFixed(2)}`).join(', ');
-                    r.record({ suite: S, where, check: 'design: density', status: a.density.choice === 'balanced' ? 'pass' : 'warn', detail: `${a.density.choice} (${probs})`, evidence: [shots[0]] });
-                    for (const k of ['h1_status', 'h2_language', 'h4_consistency', 'h6_recognition', 'h8_minimalist'] as const) scored(r, where, `heuristic: ${k}`, a[k], shots, k === 'h8_minimalist' ? PLAIN_PASSES : undefined);
-                    r.record({ suite: S, where, check: 'heuristic: h10_help', status: status(good(a.h10_help.noul)), detail: `p=${a.h10_help.noul.toFixed(2)}`, evidence: shots });
+                    r.record({ suite: S, where, check: 'design: density', status: a.density.choice === 'balanced' ? 'pass' : 'warn', detail: `${sayChoice(DESIGN.density, a.density)} (${probs})`, evidence: [shots[0]] });
+                    for (const k of ['h1_status', 'h2_language', 'h4_consistency', 'h6_recognition', 'h8_minimalist'] as const) scored(r, where, `heuristic: ${k}`, heur[k], a[k], shots, k === 'h8_minimalist' ? PLAIN_PASSES : undefined);
+                    r.record({ suite: S, where, check: 'heuristic: h10_help', status: status(good(a.h10_help.noul)), detail: sayNoul(heur.h10_help, a.h10_help.noul, good(a.h10_help.noul) !== 'pass'), evidence: shots });
 
                     // Guerrilla five-second test, on the first screen only. It needs the screen's purpose; picking the job
                     // among the others needs at least one other screen with a purpose.
                     if (s.purpose) {
                         const others = [...new Set(screens.filter((x) => x.name !== s.name && x.purpose && x.purpose !== s.purpose).map((x) => x.purpose!))].slice(0, 6);
-                        const { purpose_pick, ...rest } = guerrilla(s.purpose, others);
+                        const gq = guerrilla(s.purpose, others), { purpose_pick, ...rest } = gq;
                         const g = await ask(`${key}-guerrilla`, { screenshot: img(shots[0]) }, others.length ? { ...rest, purpose_pick } : rest, [shots[0]]);
-                        r.record({ suite: S, where, check: 'guerrilla: purpose clear in 5s', status: status(good(g.purpose_clear.noul)), detail: `p=${g.purpose_clear.noul.toFixed(2)}`, evidence: [shots[0]] });
+                        r.record({ suite: S, where, check: 'guerrilla: purpose clear in 5s', status: status(good(g.purpose_clear.noul)), detail: sayNoul(gq.purpose_clear, g.purpose_clear.noul, good(g.purpose_clear.noul) !== 'pass'), evidence: [shots[0]] });
                         if (others.length) {
                             const picked = g.purpose_pick.choice === purposeKey(s.purpose);
-                            r.record({ suite: S, where, check: 'guerrilla: right job picked', status: picked ? 'pass' : 'fail', detail: picked ? undefined : `read as "${g.purpose_pick.choice}"`, evidence: [shots[0]] });
+                            r.record({ suite: S, where, check: 'guerrilla: right job picked', status: picked ? 'pass' : 'fail', detail: picked ? undefined : `${sayChoice(purpose_pick, g.purpose_pick)}; its purpose is: ${s.purpose}`, evidence: [shots[0]] });
                         }
-                        scored(r, where, 'guerrilla: trust', g.trust, [shots[0]], PLAIN_PASSES);
+                        scored(r, where, 'guerrilla: trust', gq.trust, g.trust, [shots[0]], PLAIN_PASSES);
                     } else {
                         r.record({ suite: S, where, check: 'guerrilla five-second test', status: 'info', detail: 'skipped: give the screen a purpose in tapcheck.yml to run it' });
                     }

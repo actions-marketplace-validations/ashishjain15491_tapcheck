@@ -60,7 +60,7 @@ test('usability: a flyout left open by the pointer covers nothing on the next st
     // A control with no words on it is offered as the icon a first-time user sees, not as if its hidden name were its label.
     const offered = seen.flatMap((q) => q.state.controls ?? []).filter((c: string) => /Export list/.test(c));
     assert.deepEqual([...new Set(offered)], ['The button that is an icon with no visible text (tooltip "Export list"), in the main area.']);
-    assert.match(at('Trap:', 'task completed')[1]!, /^click failed on "Trap": /);
+    assert.match(at('Trap:', 'task completed')[1]!, /^click failed on "Trap", in the main area \(step 1\): .*<div id="cover">banner<\/div> intercepts pointer events/);
     assert.doesNotMatch(at('Trap:', 'task completed')[1]!, /Call log/);
 });
 

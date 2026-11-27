@@ -62,7 +62,7 @@ test('audit: button sizes, cut-off text, a white background in dark mode, token 
     // The menu the markup announces is opened and measured, and Jev looks at the screen and at the menu.
     assert.match(at('Home › More', 'fits on the screen'), /^fail: 1: it spans -50,200/);
     assert.deepEqual(asked.map((q) => q.includes('loaded')), [true, false]);
-    assert.deepEqual([at('Home · desktop', 'visual: loaded'), at('Home › More', 'visual: overlap')], ['pass: p=0.90', 'pass: p=0.10']);
+    assert.deepEqual([at('Home · desktop', 'visual: loaded'), at('Home › More', 'visual: overlap')], [`pass: "Do the screenshots show the screen's main content, fully loaded?" Jev: yes (90% sure)`, `pass: "In the screenshots, do any texts or controls overlap each other?" Jev: no (90% sure)`]);
     assert.deepEqual(found.filter((f) => f.status === 'info').map((f) => f.check), []);
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(`${tmp}/audit.json`, 'utf8')).screens[0].views), ['desktop', 'menu "More"', 'dark', 'tablet', 'phone']);
 });
@@ -138,7 +138,7 @@ test('audit: Tab starts at the main content, controls in view are measured first
     assert.equal(at('many · desktop', 'controls do not overlap'), 'fail: 1: Save ↔ Cancel');
     assert.equal(at('many · desktop', 'controls measured'), 'info: measured the first 300 of 400 controls, those in the window first');
     assert.match(at('dialog › Details', 'text is not cut off'), /^fail: 1: "A very long line/);
-    assert.equal(at('dialog › Details', 'visual: loaded'), 'pass: p=0.90');
+    assert.equal(at('dialog › Details', 'visual: loaded'), `pass: "Do the screenshots show the screen's main content, fully loaded?" Jev: yes (90% sure)`);
     assert.equal(at('dark · dark', 'dark mode: text contrast (axe)'), 'fail: 1: #night');
 });
 

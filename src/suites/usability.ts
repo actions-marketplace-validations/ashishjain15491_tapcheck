@@ -81,14 +81,21 @@ async function clickMap(page: Page, all: Click[], out: string) {
     await p.close();
 }
 
+/** Why Playwright couldn't click or type: the first line, and the call log's reason (a cover, hidden, moving, disabled). */
+export function whyFailed(e: Error) {
+    const lines = e.message.split('\n'), reason = [...lines].reverse().find((l) => /intercepts pointer events|not visible|not stable|not enabled|outside of the viewport|detached|not attached/.test(l));
+    return `${lines[0].slice(0, 80)}${reason ? `: ${reason.replace(/^\s*-\s*/, '').slice(0, 160)}` : ''}`;
+}
+
 async function attempt(r: Run, page: Page, t: Task, vh: number) {
     await open(r, page, t.from);
     const clicks: Click[] = [];
     const tried = new Set<string>(); // url|option that changed nothing: not offered again on that screen
-    let reached = false, note = '', errorShown = false;
+    let reached = false, note = '', errorShown = false, lastShot = '';
     for (let step = 1; step <= MAX_STEPS + 1; step++) {
         const shot = `${r.dir}/shots/task-${slug(t.name)}-${step}.png`;
         await page.screenshot({ path: shot });
+        lastShot = shot;
         const { opts, at, visible } = await options(r, page, vh, t.text, tried);
         // Scrolling is an option while there is more page below, at most twice per screen (a third look is a lost user).
         const scrolled = clicks.filter((c) => !c.place && c.from === page.url()).length;
@@ -100,7 +107,7 @@ async function attempt(r: Run, page: Page, t: Task, vh: number) {
         const a = await ask(`task-${slug(t.name)}-${step}`, { goal: t.goal, already_clicked: clicks.map((c) => c.label), screenshot: img(shot), controls: Object.values(opts) }, q, [shot]);
         errorShown ||= bad(a.error.noul) === 'FAIL';
         if (step > 1 && good(a.arrived.noul) === 'pass') { reached = true; break; }
-        if (last) { note = `${out ? `not reached after ${MAX_STEPS} clicks` : 'no safe control to click'} (p=${a.arrived.noul.toFixed(2)})`; break; }
+        if (last) { note = `${out ? `not reached after ${MAX_STEPS} clicks` : 'no safe control to click'} (Jev: ${Math.round(a.arrived.noul * 100)}% that the last screen shows this: ${t.done})`; break; }
         if (good(a.can_progress.noul) === 'FAIL') { note = `stuck: nothing on screen leads toward the goal (step ${step})`; break; }
         if (a.pick.choice === SCROLL) {
             await page.mouse.wheel(0, vh * 0.8);
@@ -127,7 +134,7 @@ async function attempt(r: Run, page: Page, t: Task, vh: number) {
                 await page.waitForTimeout(250);
                 await visible[pick.i].click({ timeout: 5000 });
             }
-        } catch (e) { page.off('response', onResponse); note = `${pick.c.typing ? 'typing' : 'click'} failed on "${pick.c.label}": ${(e as Error).message.split('\n')[0].slice(0, 80)}`; break; }
+        } catch (e) { page.off('response', onResponse); note = `${pick.c.typing ? 'typing' : 'click'} failed on "${pick.c.label}", ${place(pick.c)} (step ${step}): ${whyFailed(e as Error)}`; break; }
         await settle(page);
         page.off('response', onResponse);
         const after = await page.evaluate(() => document.body.innerHTML.length);
@@ -144,7 +151,7 @@ async function attempt(r: Run, page: Page, t: Task, vh: number) {
             ms: Date.now() - t0, dead: !c.typing && !['input', 'select', 'textarea'].includes(c.tag) && dead,
             hesitation: a.hesitation.noul, shot, requests });
     }
-    return { reached, note, clicks, errorShown };
+    return { reached, note, clicks, errorShown, lastShot };
 }
 
 export async function run(r: Run) {
@@ -162,7 +169,8 @@ export async function run(r: Run) {
                 const a = await attempt(r, page, t, vp.height);
                 const map = `${r.dir}/shots/clickstream-${slug(t.name)}.png`;
                 await clickMap(page, a.clicks, map);
-                const ev = a.clicks.some((c) => c.place) ? [map] : [];
+                // The click map, and the last screen when the task stopped there (a failed click shows what was in the way).
+                const ev = [...(a.clicks.some((c) => c.place) ? [map] : []), ...(!a.reached && a.lastShot ? [a.lastShot] : [])];
                 r.record({ suite: S, where, check: 'task completed', status: a.reached ? 'pass' : 'fail',
                     detail: [a.note, `${a.clicks.length} click(s): ${a.clicks.map((c) => c.label).join(' → ')}`].filter(Boolean).join(' · '), evidence: ev });
                 if (a.reached) {
@@ -170,9 +178,9 @@ export async function run(r: Run) {
                     r.record({ suite: S, where, check: 'path efficiency', status: extra <= 0 ? 'pass' : extra === 1 ? 'warn' : 'fail', detail: `${a.clicks.length} clicks, shortest path ${t.optimal}`, evidence: ev });
                 }
                 const hes = a.clicks.filter((c) => c.hesitation > 0.5);
-                r.record({ suite: S, where, check: 'no hesitation', status: hes.length ? 'warn' : 'pass', detail: hes.map((c) => `step ${c.step} (p=${c.hesitation.toFixed(2)})`).join(', ') || undefined, evidence: ev });
+                r.record({ suite: S, where, check: 'no hesitation', status: hes.length ? 'warn' : 'pass', detail: hes.map((c) => `step ${c.step}, before "${c.label}": Jev puts ${Math.round(c.hesitation * 100)}% on a first-time user being unsure what to click (several controls look alike, or none is labelled to match the goal)`).join('; ') || undefined, evidence: ev });
                 const dead = a.clicks.filter((c) => c.dead);
-                r.record({ suite: S, where, check: 'no dead clicks', status: dead.length ? 'fail' : 'pass', detail: dead.map((c) => `"${c.label}"`).join(', ') || undefined, evidence: ev });
+                r.record({ suite: S, where, check: 'no dead clicks', status: dead.length ? 'fail' : 'pass', detail: dead.map((c) => `step ${c.step}: "${c.label}", ${c.place}, on ${new URL(c.from).pathname}${new URL(c.from).hash}: the address, the page and the network stayed the same`).join('; ') || undefined, evidence: ev });
                 r.record({ suite: S, where, check: 'no error on the way', status: a.errorShown ? 'fail' : 'pass' });
                 // Request correlation: which click set off a failing request.
                 const failed = a.clicks.flatMap((c) => c.requests.filter((q) => q.status >= 400).map((q) => `"${c.label}" → ${q.status} ${q.method} ${new URL(q.url).pathname}`));

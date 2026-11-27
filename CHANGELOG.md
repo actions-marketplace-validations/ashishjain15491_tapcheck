@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Jump to a suite in report.html.** Each suite card shows only that suite's rows (click again, or the chip, for all),
+  and the address gets `#suite=<name>` so a link opens the report there; the filters stay at the top while scrolling.
+- **Search and totals in report.html.** A search box in the filter bar keeps the rows with all its words (screen,
+  check, detail), passes and info included; the run's failing, warning, passing and info totals sit under the title.
+- **Details that say what is wrong.** A Jev finding gives the question it answered and its answer in words, and on a
+  warning or failure what that answer means (for a score, the description of the nearest level), not `p=0.75` or
+  `5.6/10`. A failing visual check (cut off, overlap, out of line, an error, a raw key) is boxed on the screenshot
+  where Jev places it, first in the evidence; with several slices, each is asked first whether it shows it. This
+  costs a few Jev calls per failing screen, within the budget.
+- **usability** says why a click failed (what covered the control, or that it was hidden or moving), at which step and
+  where, and adds the screen it stopped on; a dead click names its step, place and screen; hesitation and "not
+  reached" say in words what Jev judged.
+
 ## 0.1.4 (2026-11-27)
 
 Test only the devices an app is built for, and fixes from reviewing a long run on a real app, for false alarms and

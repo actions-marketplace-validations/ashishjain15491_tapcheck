@@ -310,7 +310,7 @@ export async function run(r: Run) {
     const look = async (where: string, key: string, state: Record<string, unknown>, questions: Record<string, unknown>, shots: string[]) => {
         if (jevOff) return;
         try {
-            visual(r, S, where, await ask(key, { ...state, screenshots: shots.map(img) }, questions, shots), shots);
+            await visual(r, S, where, await ask(key, { ...state, screenshots: shots.map(img) }, questions, shots), shots);
         } catch (e) {
             if (!(e instanceof BudgetReached)) throw e;
             jevOff = 'Jev budget reached';

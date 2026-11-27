@@ -69,8 +69,9 @@ test('ux: plain passes for trust and minimalism, and a missed CTA prediction war
 
     const at = (where: string, check: string) => { const f = found.find((x) => x.where === where && x.check === check); return f && `${f.status}: ${f.detail ?? ''}`; };
     assert.deepEqual(found.filter((f) => f.check === 'audit ran'), []);
-    for (const check of ['guerrilla: trust', 'heuristic: h8_minimalist']) assert.equal(at('Short · desktop', check), 'pass: 5.5/10 (confidence 0.90) · passes from 5.5');
-    assert.equal(at('Short · desktop', 'design: hierarchy'), 'warn: 5.5/10 (confidence 0.90)');
+    assert.equal(at('Short · desktop', 'guerrilla: trust'), 'pass: 5.5/10 (confidence 0.90) for "How trustworthy and professional does the screenshot look to a first-time visitor?" · passes from 5.5');
+    assert.equal(at('Short · desktop', 'heuristic: h8_minimalist'), 'pass: 5.5/10 (confidence 0.90) for "How free are the screenshots of things that do not help the person with this screen?" · passes from 5.5');
+    assert.equal(at('Short · desktop', 'design: hierarchy'), 'warn: 5.5/10 (confidence 0.90) for "How clear is the visual hierarchy in the screenshots?" Nearest level (3 of 5): The page title is clear, but secondary parts compete with the main content.');
     // One slice: the whole-screen answer is the first screen's. The looks miss the CTA's box, which is a warning.
     assert.match(at('Short · desktop', 'attention: main CTA among first three looks')!, /^warn: the eye is predicted to land elsewhere first \(a prediction/);
     // Three slices: the first screen is asked on its own, and its clear "no" is info though the whole screen has a CTA.
@@ -107,6 +108,35 @@ test('ux: no main call to action is info, audit owns the desktop look and target
     assert.match(at('Home · desktop', 'design: hierarchy')!, /^fail: 2\.1\/10/); // the other scores are still judged
     // Desktop: audit asked the VISUAL questions, so ux doesn't; the phone is ux's alone.
     assert.deepEqual([asked.desktop.includes('clipped'), asked.desktop.includes('hierarchy'), asked.phone.includes('clipped')], [false, true, true]);
-    assert.deepEqual([at('Home · desktop', 'visual: loaded'), at('Home · phone', 'visual: loaded')], [undefined, 'pass: p=0.95']);
+    assert.deepEqual([at('Home · desktop', 'visual: loaded'), at('Home · phone', 'visual: loaded')], [undefined, `pass: "Do the screenshots show the screen's main content, fully loaded?" Jev: yes (95% sure)`]);
     assert.deepEqual(found.filter((f) => /target size/.test(f.check)), []);
+});
+
+test('visual: a failing defect says what was asked and is boxed on the slice that shows it; a box over the whole slice points at nothing', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-locate-`);
+    after(closeBrowser);
+    const { launch } = await import('../src/browser.ts');
+    const page = await (await launch()).newPage({ viewport: { width: 400, height: 300 } });
+    await page.setContent('<body style="margin:0;background:#fff"><p>slice</p></body>');
+    const shots = [`${tmp}/a.png`, `${tmp}/b.png`];
+    for (const s of shots) await page.screenshot({ path: s });
+    await page.close();
+    const asked: string[] = [];
+    setup({ budget: 1, headers: {} }, { systemOne: async ({ questions, model }) => {
+        asked.push(`${model ?? 'default'}:${Object.keys(questions).join()}`);
+        // Only the second slice shows it cut off; its box is small. The overlap box (when asked) covers the whole slice.
+        return { answers: Object.fromEntries(Object.keys(questions).map((k) => [k, model ? { box: k === 'overlap' ? { top: 0, bottom: 1, left: 0, right: 1 } : { top: 0.1, bottom: 0.3, left: 0.2, right: 0.6 } }
+            : { noul: k === 'clipped' ? (asked.length === 3 ? 0.9 : 0.1) : 0.9 }])), usage: { input_tokens: 10 } };
+    } });
+    const found: Omit<Finding, 'side'>[] = [];
+    const r = { dir: tmp, record: (f: Omit<Finding, 'side'>) => { found.push(f); } } as unknown as Run;
+    await ux.visual(r, 'ux', 'Home · desktop', { clipped: { noul: 0.9 }, overlap: { noul: 0.9 }, loaded: { noul: 0.9 } }, shots);
+    const f = (k: string) => found.find((x) => x.check === `visual: ${k}`)!;
+    // Each slice: does it show them (yes-or-no), then a box for each it shows.
+    assert.deepEqual(asked, ['default:overlap,clipped', 'jev-preview:overlap', 'default:overlap,clipped', 'jev-preview:overlap,clipped']);
+    assert.match(f('clipped').detail!, /^"In the screenshots, is any text or control cut off\?" Jev: yes \(90% sure\)\. Yes means: A word, label.* · boxed where Jev places it/);
+    assert.deepEqual(f('clipped').evidence, [`${tmp}/shots/ux_home_desktop-where-clipped-2.png`, ...shots]);
+    assert.match(f('overlap').detail!, /Jev couldn't point to one place/);
+    assert.deepEqual(f('overlap').evidence, shots);
+    assert.equal(f('loaded').detail, `"Do the screenshots show the screen's main content, fully loaded?" Jev: yes (90% sure)`);
 });

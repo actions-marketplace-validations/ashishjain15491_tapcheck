@@ -98,3 +98,23 @@ export const spent = () => tokens * USD_PER_TOKEN;
 export const usage = () => ({ tokens, usd: Math.round(spent() * 10000) / 10000, budget: opts.budget, calls, cached, avgMs: calls ? Math.round(ms / calls) : 0 });
 /** Every request of the run, as sent (images as file paths; the key and headers are not part of it). */
 export const savePayloads = (dir: string) => writeFileSync(`${dir}/payloads.json`, JSON.stringify(payloads, null, 2));
+
+// ───────────────────────────── Details a person can act on ─────────────────────────────
+type Q = { instructions?: unknown; criteria?: unknown };
+/** A question as a person reads it: its first sentence, with the request's field names put as words. */
+export const asked = (q: Q) => { const t = String(q.instructions ?? ''); return (t.match(/^.*?\?(?=\s|$)/)?.[0] ?? t).replace(/`(\w+)`/g, 'the $1'); };
+/** A yes-or-no answer in words: the question, Jev's lean, and (`full`, for a fail or warning) what that answer means. */
+export function sayNoul(q: Q, p: number, full = true) {
+    const yes = p >= 0.5, means = full && (q.criteria as Record<string, string> | undefined)?.[yes ? 'true' : 'false'];
+    return `"${asked(q)}" Jev: ${yes ? 'yes' : 'no'} (${Math.round((yes ? p : 1 - p) * 100)}% sure)${means ? `. ${yes ? 'Yes' : 'No'} means: ${means}` : ''}`;
+}
+/** A score in words: the question and (`full`) the description of the level the score is nearest to. */
+export function sayScore(q: Q, a: { score: number; confidence: number }, full = true) {
+    const levels = Array.isArray(q.criteria) && full ? q.criteria : [], i = Math.max(0, Math.min(levels.length - 1, Math.round(a.score)));
+    return `${to10(a.score)}/10 (confidence ${a.confidence.toFixed(2)}) for "${asked(q)}"${levels.length ? ` Nearest level (${i + 1} of ${levels.length}): ${levels[i]}` : ''}`;
+}
+/** A choice in words: what Jev picked, with its description, and how sure it was. */
+export function sayChoice(q: Q, a: { choice: string; probabilities?: Record<string, number> }) {
+    const p = a.probabilities?.[a.choice], means = (q.criteria as Record<string, string> | undefined)?.[a.choice];
+    return `"${asked(q)}" Jev: ${a.choice.replace(/_/g, ' ')}${p === undefined ? '' : ` (${Math.round(p * 100)}%)`}${means ? `: ${means}` : ''}`;
+}

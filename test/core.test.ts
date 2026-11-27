@@ -215,6 +215,11 @@ test('report: failures first, counts per suite, REPORT.md', () => {
     assert.ok(html.indexOf('tag fail') < html.indexOf('tag pass'));
     assert.match(html, /<b>ux<\/b><span class="n w">skipped<\/span>/);
     assert.match(html, /<b>contract<\/b><span class="n w">nothing checked<\/span>/);
+    // Each suite card picks out its rows: the card and the rows carry the suite's name.
+    assert.match(html, /<button type="button" class="card" data-s="usability" title="Show only usability"><b>usability<\/b>/);
+    assert.match(html, /<tr class="info" data-s="usability">/);
+    assert.match(html, /<p class="totals"><span class="f">1 failing<\/span> · <span class="w">1 warning<\/span> · <span class="p">\d+ passing<\/span> · \d+ info, in \d+ parts<\/p>/);
+    assert.ok(html.includes('id="q"') && html.includes('split(/\\s+/)'), 'the search box, and its regex survives the template');
 });
 
 test('session guard: LOGIN=1 is suggested on a manual side only', () => {
