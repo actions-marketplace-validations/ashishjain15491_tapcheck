@@ -17,7 +17,7 @@
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import type { Page } from 'playwright';
-import type { Screen } from '../config.ts';
+import { mainViewport, type Screen } from '../config.ts';
 import { abs, context, facts, open, resolve, SessionExpired, slices, slug, watch, type Run } from '../browser.ts';
 import { ask, bad, BudgetReached, FAIL_SCORE, good, img, looked, MIN_SCORE, NO, scoreStatus, status, to10 } from '../jev.ts';
 import { ATTENTION, ATTENTION_CHECK, ATTENTION_MODEL, DESIGN, guerrilla, HEURISTICS, purposeKey, VISUAL } from '../questions.ts';
@@ -149,7 +149,7 @@ export async function run(r: Run) {
 
                     // One request for every judgment over the same screenshots. The VISUAL questions are left out when the
                     // audit suite asked them of this screen at this viewport earlier in the run.
-                    const audited = vp === r.cfg.viewports.find((v) => !v.mobile) && looked.has(`${r.dir} ${s.name}`);
+                    const audited = vp === mainViewport(r.cfg) && looked.has(`${r.dir} ${s.name}`);
                     const a = await ask(key, { screen: s.name, viewport: `${vp.name}, ${vp.width} × ${vp.height} px`, screenshots: shots.map(img),
                         note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined },
                     { ...(audited ? {} : VISUAL), ...DESIGN, ...HEURISTICS(r.cfg.audience, r.cfg.context), ...ATTENTION_CHECK }, shots);

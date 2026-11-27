@@ -11,7 +11,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Page, Response } from 'playwright';
-import type { Task } from '../config.ts';
+import { mainViewport, type Task } from '../config.ts';
 import { context, open, SessionExpired, settle, slug, type Run } from '../browser.ts';
 import { ask, bad, BudgetReached, good, img, NO } from '../jev.ts';
 import { MAX_STEPS, SCROLL, TASK_Q } from '../questions.ts';
@@ -151,7 +151,7 @@ export async function run(r: Run) {
     // The check and status of a skipped part, so the report lists it under Skipped instead of counting it as clean.
     if (!r.side.tasks.length) { r.record({ suite: S, where: `${S}-${r.side.name}`, check: 'part ran', status: 'info', detail: 'skipped: no tasks for this side' }); return; }
     mkdirSync(`${r.dir}/shots`, { recursive: true });
-    const vp = r.cfg.viewports.find((v) => !v.mobile) ?? r.cfg.viewports[0];
+    const vp = mainViewport(r.cfg);
     const ctx = await context(r, vp);
     const page = await ctx.newPage();
     const stream: unknown[] = [];

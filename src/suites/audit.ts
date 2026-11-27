@@ -22,7 +22,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
-import type { Config } from '../config.ts';
+import { device, mainViewport, type Config } from '../config.ts';
 import { context, hashRoute, marked, open, resolve, SessionExpired, settle, slices, slug, type Run, type Viewport } from '../browser.ts';
 import { ask, BudgetReached, img, looked, whyOff } from '../jev.ts';
 import { VISUAL } from '../questions.ts';
@@ -31,7 +31,7 @@ import { UNSAFE } from './usability.ts';
 import { visual } from './ux.ts';
 
 const S = 'audit';
-const NARROW: Viewport[] = [{ name: 'tablet', width: 768, height: 1024, mobile: false }, { name: 'phone', width: 375, height: 812, mobile: true }];
+const NARROW: Viewport[] = [{ name: 'tablet', width: 768, height: 1024, mobile: false }, { name: 'phone', width: 375, height: 812, mobile: true }]; // only the chosen devices'
 const WARN = new Set(['shortened text can be read in full', 'heading levels in order']); // the other measured checks fail
 // The checks that know their elements: measure() tags each with data-tapcheck-mark-<this> (its value the element's note), for a marked screenshot.
 const MARKS: Record<string, string> = { 'no sideways scroll': 'wide', 'text is not cut off': 'cut', 'shortened text can be read in full': 'short', 'controls do not overlap': 'overlap',
@@ -295,7 +295,9 @@ const openers = (page: Page) => page.evaluate((unsafe) => {
 
 export async function run(r: Run) {
     mkdirSync(`${r.dir}/shots`, { recursive: true });
-    const desktop = r.cfg.viewports.find((v) => !v.mobile) ?? { name: 'desktop', width: 1440, height: 900, mobile: false };
+    // The full pass (axe, dark mode, Jev's look) is on the main viewport, a desktop unless `devices` leaves it out;
+    // the tablet and phone sizes of the other chosen devices are measured after it.
+    const desktop = mainViewport(r.cfg), narrow = NARROW.filter((v) => r.cfg.devices.includes(device(v)) && v.width !== desktop.width);
     const skip = r.cfg.audit.skip;
     const out = { screens: [] as { name: string; path: string; views: Record<string, Record<string, string[]>> }[], components: {} as Record<string, unknown>, labelCase: {} as Record<string, string[]>, tokens: {} as Record<string, unknown> };
     const looks = new Map<string, Map<string, { n: number; labels: Set<string>; paints: Set<string> }>>(); // kind → shape → where it is used
@@ -332,7 +334,7 @@ export async function run(r: Run) {
 
     const pending = new Set<unknown>(); // the desktop page's requests that haven't ended
     async function onDesktop(page: Page, t: (typeof out.screens)[number]) {
-        const where = `${t.name} · desktop`, key = `audit-${slug(t.name)}`;
+        const where = `${t.name} · ${desktop.name}`, key = `audit-${slug(t.name)}`;
         await open(r, page, t.path);
         // What a theme changes: the page's own background and text colour, and the background of every surface a quarter
         // of the window or more. Smaller things (a price that turned red, a row that came in) change between two loads anyway.
@@ -362,9 +364,9 @@ export async function run(r: Run) {
             use.n++;
         }
         const shots = jevOff ? undefined : await slices(r, page, key, await page.evaluate(() => document.documentElement.scrollHeight), desktop.height);
-        await emit(page, t, 'desktop', where, { ...m.problems, 'focus ring on every Tab stop': await noFocusRing(page) }, shots, m.capped);
+        await emit(page, t, desktop.name, where, { ...m.problems, 'focus ring on every Tab stop': await noFocusRing(page) }, shots, m.capped);
         if (shots) {
-            await look(where, key, { screen: t.name, viewport: `desktop, ${desktop.width} × ${desktop.height} px`, note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined }, VISUAL, shots);
+            await look(where, key, { screen: t.name, viewport: `${desktop.name}, ${desktop.width} × ${desktop.height} px`, note: shots.length > 1 ? 'The screenshots are consecutive slices of one screen, top to bottom.' : undefined }, VISUAL, shots);
             if (!jevOff) looked.add(`${r.dir} ${t.name}`); // answered, not stopped by the budget
         }
 
@@ -396,7 +398,7 @@ export async function run(r: Run) {
                 const questions = /dialog/.test(found) ? VISUAL : rest; // a dialog loads its content as a screen does; a menu or a list of options doesn't
                 // Jev sees the menu or dialog alone: the page around it is covered on purpose, and isn't what is asked about.
                 const crop = jevOff ? undefined : await popupShot(page, `${r.dir}/shots/${key}-popup-${opened}-alone.png`);
-                await look(at, `${key}-popup-${opened}`, { screen: `${t.name}, after "${label}" was clicked`, viewport: `desktop, ${desktop.width} × ${desktop.height} px`,
+                await look(at, `${key}-popup-${opened}`, { screen: `${t.name}, after "${label}" was clicked`, viewport: `${desktop.name}, ${desktop.width} × ${desktop.height} px`,
                     note: crop ? `The screenshot shows only the ${found} that opened, cut out of the screen; any of the page at its edges is not part of the question.` : undefined }, questions, [crop ?? shot]);
             }
             await page.keyboard.press('Escape').catch(() => {});
@@ -430,7 +432,7 @@ export async function run(r: Run) {
         }
     }
 
-    for (const vp of [desktop, ...NARROW]) {
+    for (const vp of [desktop, ...narrow]) {
         const first = vp === desktop;
         const ctx = await context(r, vp, true, first); // axe is injected on desktop, so the page's own CSP is set aside there
         const page = await ctx.newPage();

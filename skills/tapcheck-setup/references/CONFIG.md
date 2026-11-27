@@ -68,6 +68,9 @@ security:
   allowedHosts: [fonts.example.com] # third-party hosts the pages may call; any other is a failing finding (the app's own subdomains, api.example.com, aren't third-party)
   publicWrites: "^/(login|webhooks/)"  # POST/PUT/PATCH/DELETE routes that need no sign-in on purpose (see routes)
 
+devices: [desktop, mobile]          # default all: desktop, tablet, mobile. Leave out the kinds the app isn't
+                                    # built for: their viewports and audit's 768 px tablet or 375 px phone are
+                                    # skipped (DEVICES=desktop for one run)
 viewports:                          # default: these two. a11y and ux run on each; interact and audit use the first that isn't mobile
   - { name: desktop, width: 1440, height: 900 }
   - { name: mobile, width: 390, height: 844, mobile: true }
@@ -442,6 +445,7 @@ check off for the run. The sign-in browser of a `form` login doesn't get these s
 | `RECORD=1` | a video and a Playwright trace of every browser context, under `<side>/videos/` and `<side>/traces/`, linked from the report |
 | `COVERAGE=1` | no run: merge every run's `hits.json` into `COVERAGE.md` (see coverage) |
 | `LOGIN=1` | sign in again by hand on `manual` sides |
+| `DEVICES=desktop,tablet` | only these kinds of device this run (overrides `devices`): `desktop`, `tablet`, `mobile` or `all` |
 | `CONTRACT_UPDATE=1` | accept the current JSON response shapes as the contract baseline (new endpoints are added without it) |
 | `TAPCHECK_CONFIG=path` | another config file instead of `./tapcheck.yml` |
 

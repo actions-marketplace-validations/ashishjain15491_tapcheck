@@ -39,6 +39,7 @@ starts nothing. Use it when the user asks what there is, or when you are unsure 
 | only the linters and audits | `ONLY=code TAPCHECK` (starts no app and no browser) |
 | "verify this release", "check what PR 42 claims", "QA the deploy" | the `tapcheck-verify` skill (it writes a flow per release item, then `MARK=1 ONLY=verify TAPCHECK`) |
 | screenshots that show where the problem is | add `MARK=1` to any of the above |
+| only some devices: "just desktop", "skip the phone layout" | add `DEVICES=desktop` (or `desktop,tablet`; `devices` in `tapcheck.yml` for good) |
 | what would run | add `LIST=1` to any of the above |
 
 - `CHANGED=1` runs, of the chosen parts, those whose files changed since each last passed, and any that never

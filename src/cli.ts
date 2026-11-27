@@ -36,6 +36,8 @@
  *   COVERAGE=1 tapcheck             no run: merge the hits.json of every run so far into COVERAGE.md (coverage.file): each
  *                                   route of `routes:` with the part that reached it or GAP, and the dialogs and tables seen
  *   LOGIN=1 tapcheck                sign in again by hand on manual sides
+ *   DEVICES=desktop,tablet tapcheck only these kinds of device (default `devices` in tapcheck.yml, or all): desktop,
+ *                                   tablet, mobile; the viewports and audit's sizes of the others are left out
  *   TAPCHECK_CONFIG=path tapcheck   another config file
  *
  * ux, usability and audit ask Jev (TypeSafe): put TYPESAFE_API_KEY in the environment, or in a .env file next to tapcheck.yml.
@@ -144,7 +146,7 @@ if (!chosen.length) {
     console.log(`Nothing to run: ${changedBase ? `no chosen part has changed files since ${changedBase}.` : process.env.CHANGED === '1' ? 'no chosen part has changed files since it last passed.' : 'SKIP took out every chosen part.'}`);
     process.exit(0);
 }
-console.log(`Running: ${chosen.map((p) => p.name).join(', ')}`);
+console.log(`Running: ${chosen.map((p) => p.name).join(', ')}${cfg.devices.length < 3 ? ` (devices: ${cfg.devices.join(', ')})` : ''}`);
 
 jev.setup({ ...cfg.jev, context: cfg.context });
 // Why the Jev parts are skipped, or '' when they run. Once the budget is reached it says so, and the rest are skipped too.

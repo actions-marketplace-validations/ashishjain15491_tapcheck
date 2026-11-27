@@ -45,7 +45,8 @@ export type Config = {
     // The design tokens the audit holds computed styles to; a list left out isn't checked. Colours are hex, radii and spacing px.
     design?: { colors?: string[]; fonts?: string[]; radii?: number[]; spacing?: number[] };
     security: { csrf?: Csrf; allowedHosts: string[]; publicWrites?: RegExp }; // publicWrites: routes that write without sign-in on purpose
-    viewports: { name: string; width: number; height: number; mobile: boolean }[];
+    viewports: { name: string; width: number; height: number; mobile: boolean }[]; // only those of the chosen devices
+    devices: Device[]; // the kinds of device the app is for (DEVICES overrides it); default all three
     out: string;
     audience: string; // who the app is for, in the words Jev is asked with ("a shop owner", "a nurse on a ward")
     context?: string; // what kind of product it is and the conventions its users expect; sent to Jev with every question
@@ -73,6 +74,12 @@ const DEFAULT_VIEWPORTS = [
     { name: 'desktop', width: 1440, height: 900, mobile: false },
     { name: 'mobile', width: 390, height: 844, mobile: true },
 ];
+export const DEVICES = ['desktop', 'tablet', 'mobile'] as const;
+export type Device = (typeof DEVICES)[number];
+/** The kind of device a viewport is: a touch phone is mobile, anything else under 1024 px wide a tablet. */
+export const device = (v: { width: number; mobile: boolean }): Device => (v.mobile ? 'mobile' : v.width < 1024 ? 'tablet' : 'desktop');
+/** The viewport the single-size parts use (interact, usability, audit's full pass): the first that isn't a phone. */
+export const mainViewport = (c: Pick<Config, 'viewports'>) => c.viewports.find((v) => !v.mobile) ?? c.viewports[0];
 
 /** Replaces $NAME and ${NAME} in every string with the environment's value; a missing variable is an error. */
 export function expand(v: unknown, at = ''): any {
@@ -298,12 +305,23 @@ export function check(raw: any, root = process.cwd()): Config {
     const allowedHosts = s.allowedHosts ?? [];
     if (!Array.isArray(allowedHosts)) fail('security.allowedHosts', 'must be a list of host names');
 
-    const viewports = raw.viewports ?? DEFAULT_VIEWPORTS;
+    const devAt = process.env.DEVICES ? 'DEVICES (environment)' : 'devices';
+    const devRaw = process.env.DEVICES || raw.devices || 'all';
+    const devList: unknown[] = Array.isArray(devRaw) ? devRaw : String(devRaw).split(',').map((d) => d.trim()).filter(Boolean);
+    const devices: Device[] = devList.length === 1 && devList[0] === 'all' ? [...DEVICES] : (devList as Device[]);
+    if (!devices.length || devices.some((d) => !DEVICES.includes(d))) fail(devAt, `must be all, or one or more of ${DEVICES.join(', ')}`);
+    let viewports = raw.viewports ?? DEFAULT_VIEWPORTS.map((v) => ({ ...v }));
     if (!Array.isArray(viewports) || !viewports.length) fail('viewports', 'must be a list of {name, width, height, mobile?}');
     viewports.forEach((v: any, i: number) => {
         if (!v?.name || !Number.isInteger(v.width) || !Number.isInteger(v.height)) fail(`viewports[${i}]`, 'needs name, width and height');
         v.mobile = v.mobile === true;
     });
+    const all = viewports;
+    viewports = all.filter((v: any) => devices.includes(device(v)));
+    if (!viewports.length) {
+        if (raw.viewports) fail(devAt, `none of the viewports is a ${devices.join(' or ')} (mobile: true is a phone; under 1024 px wide a tablet; wider a desktop)`);
+        viewports = [{ name: 'tablet', width: 768, height: 1024, mobile: false }]; // tablet alone: the defaults have none
+    }
 
     const j = raw.jev ?? {};
     if (typeof j !== 'object' || Array.isArray(j)) fail('jev', 'must be {budget?, headers?}');
@@ -341,7 +359,7 @@ export function check(raw: any, root = process.cwd()): Config {
         mail: { mailpit: raw.mail?.mailpit === undefined ? undefined : url(raw.mail.mailpit, 'mail.mailpit') }, audience: str(raw.audience ?? 'a first-time visitor', 'audience')!, context: str(raw.context, 'context', true), expect: expect(raw.expect), jev: { budget, headers },
         i18n: { keys: str(raw.i18n?.keys, 'i18n.keys', true) }, loginPaths: regex(raw.loginPaths, 'loginPaths', '/(login|sign-?in|two-factor|2fa)(/|$)'),
         crawl: { max, skip: regex(c.skip, 'crawl.skip', DEFAULT_SKIP) }, interact: { max: interactMax, submit: it.submit === true },
-        audit: { max: auditMax, skip: au.skip === undefined ? undefined : regex(au.skip, 'audit.skip', '') }, design: design(raw.design), security: { csrf, allowedHosts, publicWrites: s.publicWrites === undefined ? undefined : regex(s.publicWrites, 'security.publicWrites', '') }, viewports, out: str(raw.out ?? '.tapcheck', 'out')! };
+        audit: { max: auditMax, skip: au.skip === undefined ? undefined : regex(au.skip, 'audit.skip', '') }, design: design(raw.design), security: { csrf, allowedHosts, publicWrites: s.publicWrites === undefined ? undefined : regex(s.publicWrites, 'security.publicWrites', '') }, viewports, devices, out: str(raw.out ?? '.tapcheck', 'out')! };
 }
 
 export function load(file = 'tapcheck.yml'): Config {

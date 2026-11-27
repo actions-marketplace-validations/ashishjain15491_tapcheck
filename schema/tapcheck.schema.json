@@ -129,8 +129,16 @@
                 "publicWrites": { "$ref": "#/definitions/text", "description": "Regular expression (case-insensitive) of POST/PUT/PATCH/DELETE routes that need no sign-in on purpose, e.g. ^/(login|webhooks/)." }
             }
         },
+        "devices": {
+            "description": "The kinds of device the app is built for (DEVICES overrides it): the viewports of the others, and audit's 768 px tablet or 375 px phone, are left out. A viewport with mobile: true is a phone, one under 1024 px wide a tablet, a wider one a desktop.",
+            "oneOf": [
+                { "const": "all" },
+                { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["desktop", "tablet", "mobile"] } }
+            ],
+            "default": "all"
+        },
         "viewports": {
-            "description": "The screen sizes a11y and ux run on; the first is used by the crawl and flows, the first that isn't mobile by interact, audit and usability (audit adds a 768 px tablet and a 375 px phone of its own).",
+            "description": "The screen sizes a11y and ux run on; the first is used by the crawl and flows, the first that isn't mobile by interact, audit and usability (audit adds a 768 px tablet and a 375 px phone of its own); only those of the chosen devices are used.",
             "type": "array",
             "minItems": 1,
             "items": {

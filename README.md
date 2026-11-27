@@ -35,6 +35,9 @@ with probabilities and code decides: a clear answer passes or fails, an unsure o
 under the pass mark (5.5 to 7 out of 10; trust and minimalism pass from 5.5). Without a Jev key the Jev parts are
 skipped and everything else runs.
 
+Everything runs on desktop, tablet and phone sizes by default. An app built for fewer sets `devices: [desktop]` (or
+`[desktop, tablet]`, `[mobile]`), and the sizes it isn't built for are left out of every suite.
+
 `MARK=1` puts a marked screenshot first in each failing or warning finding: a banner saying the check, and a numbered
 box and a note on each element at fault. To check a release or a pull request item by item, the `tapcheck-verify` skill
 writes a flow per item, and the report opens with "Release verification": what passed, failed or wasn't tested.
@@ -172,7 +175,7 @@ docker run --rm --ipc=host -e TYPESAFE_API_KEY -v "$PWD:/work" -w /work tapcheck
 ```
 
 Options are environment variables (`ONLY`, `SKIP`, `CHANGED`, `PARALLEL=4` for flows at once, `MARK=1` for marked
-screenshots, `ONLY=verify` for the release flows, `LOGIN=1` to sign in again, `LIST=1` to list the parts); the full list is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
+screenshots, `ONLY=verify` for the release flows, `DEVICES=desktop` for some kinds of device, `LOGIN=1` to sign in again, `LIST=1` to list the parts); the full list is in [CONFIG.md](skills/tapcheck-setup/references/CONFIG.md#environment-variables-for-a-run).
 
 ## Output
 

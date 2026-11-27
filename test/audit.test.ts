@@ -170,3 +170,18 @@ test('audit consistency: a field is measured at its wrapper, cards and page numb
     assert.equal(at('labels use one case'), 'pass: ');
     assert.deepEqual(JSON.parse(readFileSync(`${tmp}/audit.json`, 'utf8')).labelCase, { title: [], sentence: ['Add plant', 'Save changes'] });
 });
+
+test('audit devices: an app not built for desktop or tablet gets its full pass on the phone, and no tablet size', async () => {
+    const tmp = mkdtempSync(`${tmpdir()}/tapcheck-audit-`);
+    const server = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }).end(HOME); });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    after(async () => { await closeBrowser(); server.close(); });
+    process.env.JEV = 'off';
+    const cfg = check({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, devices: ['mobile'] }, tmp);
+    const found: Omit<Finding, 'side'>[] = [];
+    await audit.run({ cfg, side: cfg.sides[0], dir: tmp, record: (f) => { found.push(f); }, crawl: { pages: [], hits: [], done: false } });
+    const views = Object.keys(JSON.parse(readFileSync(`${tmp}/audit.json`, 'utf8')).screens[0].views);
+    assert.equal(views[0], 'mobile');
+    assert.ok(!views.includes('tablet') && !views.includes('desktop'), views.join(', '));
+    assert.ok(found.some((f) => f.where === 'Home · mobile' && f.check === 'focus ring on every Tab stop'));
+});

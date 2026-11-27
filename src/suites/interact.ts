@@ -24,7 +24,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import type { Locator, Page } from 'playwright';
-import { isLocal } from '../config.ts';
+import { isLocal, mainViewport } from '../config.ts';
 import { context, hashRoute, host, marked, site, open, reach, SessionExpired, watch, type Run } from '../browser.ts';
 import type { Finding } from '../report.ts';
 import { UNSAFE } from './usability.ts';
@@ -156,7 +156,7 @@ export async function run(r: Run) {
     }
     const log = { screens: [] as { path: string; clicked: string[]; dead: string[] }[], dialogs: [] as Record<string, unknown>[], tables: [] as Record<string, unknown>[] };
     const dialogs = new Set<string>(), tables = new Set<string>(), followed = new Set<string>(); // each dialog, table and link once per run
-    const ctx = await context(r, r.cfg.viewports.find((v) => !v.mobile) ?? r.cfg.viewports[0]);
+    const ctx = await context(r, mainViewport(r.cfg));
     const page = await ctx.newPage();
 
     // What a click set off, collected until drain() files it under the control's label.

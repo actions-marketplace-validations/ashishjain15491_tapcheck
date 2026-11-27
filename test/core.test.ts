@@ -22,6 +22,25 @@ test('config: defaults for a bare public site', () => {
     assert.ok(c.crawl.skip.test('/logout'));
     assert.ok(c.loginPaths.test('/users/sign-in'));
     assert.equal(c.viewports.length, 2);
+    assert.deepEqual(c.devices, ['desktop', 'tablet', 'mobile']);
+});
+
+test('config: devices picks the kinds of device, from the viewports and DEVICES', () => {
+    const base = 'http://localhost:8000';
+    assert.deepEqual(check({ baseUrl: base, devices: ['desktop'] }).viewports.map((v) => v.name), ['desktop']);
+    assert.deepEqual(check({ baseUrl: base, devices: 'desktop, mobile' }).viewports.map((v) => v.name), ['desktop', 'mobile']);
+    assert.deepEqual(check({ baseUrl: base, devices: ['tablet'] }).viewports.map((v) => [v.name, v.width]), [['tablet', 768]], 'the defaults have no tablet');
+    const own = [{ name: 'wide', width: 1280, height: 800 }, { name: 'pad', width: 820, height: 1180 }, { name: 'phone', width: 390, height: 844, mobile: true }];
+    assert.deepEqual(check({ baseUrl: base, devices: ['tablet', 'mobile'], viewports: own }).viewports.map((v) => v.name), ['pad', 'phone']);
+    assert.throws(() => check({ baseUrl: base, devices: ['watch'] }), /devices must be all, or one or more of desktop, tablet, mobile/);
+    assert.throws(() => check({ baseUrl: base, devices: ['tablet'], viewports: [own[0]] }), /devices none of the viewports is a tablet/);
+    process.env.DEVICES = 'mobile';
+    try {
+        const c = check({ baseUrl: base, devices: ['desktop'] });
+        assert.deepEqual([c.devices, c.viewports.map((v) => v.name)], [['mobile'], ['mobile']]);
+    } finally {
+        delete process.env.DEVICES;
+    }
 });
 
 test('config: screens per side, login kinds, csrf', () => {

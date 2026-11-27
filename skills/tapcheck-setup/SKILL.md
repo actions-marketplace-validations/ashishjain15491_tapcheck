@@ -83,6 +83,9 @@ Read the routes file, the navigation template and the seed data. You need:
 - **Screens**: the 3 to 8 pages that matter most on each side, each with a `purpose` that says what that page shows
   (open it and check: a wrong purpose makes Jev fail a page that is fine). Two names for one page are one screen.
 - **Tasks**: 1 to 3 things a first-time user comes to do, reachable by clicking alone.
+- **Devices**: ask which of desktop, tablet and phone the app is built for when the project doesn't say (a desktop-only
+  admin, a phone-first app, a mobile site served by a native app). Leave the others out with `devices`, so their
+  layouts aren't reported; the default is all three.
 - **Audience**: who the app is for, in a few words.
 - **Context**, for a specialist product (a trading terminal, a clinical system, a developer console): what kind of
   product it is and what its users expect, so Jev doesn't judge it as a consumer app. Leave it out for a general app.
@@ -202,7 +205,7 @@ security:
 ```
 
 Every other key (`app.stop`, `app.timeout`, `app.resetWhen`, `login` kinds in full, `screens` by link, `stub`,
-`flows`, `mail`, `i18n`, `crawl`, `security`, `coverage`, `viewports`, `jev`, `loginPaths`, `out`) is in
+`flows`, `mail`, `i18n`, `crawl`, `security`, `coverage`, `devices`, `viewports`, `jev`, `loginPaths`, `out`) is in
 `references/CONFIG.md`. Open it when you need one of them.
 
 - **Gates**: take them from what the project already runs (CI workflow, `package.json` scripts, `Makefile`,

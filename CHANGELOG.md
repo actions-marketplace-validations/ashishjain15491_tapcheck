@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Only the devices the app is for.** `devices` in `tapcheck.yml` (or `DEVICES=desktop,tablet` for one run) picks
+  `desktop`, `tablet` and `mobile`, default all. The viewports of the others and `audit`'s 768 px tablet or 375 px phone
+  are left out, so an app not built for a phone gets no phone findings. Without a desktop, `audit`'s full pass (dark
+  mode, Jev's look, menus and dialogs) runs on the first chosen size.
+
 Fixes from reviewing a long run on a real app, for false alarms and for what the run didn't see.
 
 - **The app's API on another subdomain is the app's.** `contract` checks calls to every host of the app's site
